@@ -18,7 +18,7 @@ function normSettings(s){
       duration: p.duration === "" || p.duration == null ? "" : Number(p.duration), actualEnd:p.actualEnd||"", modules:(p.modules||[]).map(normModule)})),
     priorities: [...(s.priorities||[])], types: [...(s.types||[])],
     valueRate: s.valueRate === "" || s.valueRate == null ? "" : Number(s.valueRate),
-    team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||"", pinHash:m.pinHash||""}))
+    team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||""}))
   };
 }
 function applySettings(s){
@@ -68,67 +68,7 @@ const VIEWS = [...TASK_VIEWS, "value", "settings"];
 if (VIEWS.includes(location.hash.slice(1))) view = location.hash.slice(1);
 else { const v = store.get("pm.view"); if (VIEWS.includes(v)) view = v; }
 const me = ""; // no "I am" picker: whoever can edit the tracker updates any task
-// ---------- PIN sign-in ----------
-// Each person in Settings → Team can have a PIN (stored only as a salted SHA-256 hash).
-// Until anyone has a PIN the tracker is open; after that, viewing is open and editing needs name + PIN.
-let pinMode = false, baseEdit = false, editor = "";
-const PIN_KEY = "pm.signin";
-async function pinHash(id, pin){
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`vcpp:${id}:${pin}`));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,"0")).join("");
-}
-const pinsSet = () => SETTINGS.team.some(m => m.pinHash);
-function currentUser(){
-  let s; try { s = JSON.parse(store.get(PIN_KEY) || "null"); } catch { s = null; }
-  return (s && SETTINGS.team.find(m => m.id === s.id && m.pinHash && m.pinHash === s.h)) || null;
-}
-function applyAccess(){
-  if (!pinMode) return;
-  const u = currentUser();
-  editor = u ? u.name : "";
-  canManage = canWrite = baseEdit && (!pinsSet() || !!u);
-  paintAuth();
-}
-function paintAuth(){
-  const b = $("#authBtn"), w = $("#authWho"); if (!b) return;
-  const show = pinMode && pinsSet();
-  b.hidden = !show; w.hidden = !show || !editor;
-  b.textContent = editor ? "Sign out" : "Sign in"; w.textContent = editor;
-}
-let pinFails = 0, pinLockUntil = 0;
-function openSignIn(){
-  openId = "signin";
-  const people = SETTINGS.team.filter(m => m.pinHash);
-  const msg = el("p",{class:"late-tag", role:"alert", style:"margin:0;white-space:normal"});
-  const who = el("select",{id:"si-who", required:true}, el("option",{value:"",text:"Choose your name"}), ...people.map(m => el("option",{value:m.id, text:m.name})));
-  const pin = el("input",{id:"si-pin", type:"password", inputmode:"numeric", autocomplete:"off", maxlength:"8", required:true});
-  const go = el("button",{class:"btn primary", type:"submit"}, "Sign in");
-  const form = el("form",{class:"body", onsubmit: async e => {
-    e.preventDefault(); msg.textContent = "";
-    if (Date.now() < pinLockUntil){ msg.textContent = `Too many wrong PINs. Try again in ${Math.ceil((pinLockUntil-Date.now())/1000)}s.`; return; }
-    const m = people.find(x => x.id === who.value);
-    if (!m){ msg.textContent = "Choose your name."; return; }
-    const h = await pinHash(m.id, pin.value.trim());
-    if (h !== m.pinHash){
-      if (++pinFails >= 5){ pinFails = 0; pinLockUntil = Date.now() + 30000; }
-      msg.textContent = "Wrong PIN."; pin.value = ""; pin.focus(); return;
-    }
-    pinFails = 0; store.set(PIN_KEY, JSON.stringify({id:m.id, h}));
-    applyAccess(); closeSheet(); render(); toast(`Signed in as ${m.name}`);
-  }},
-    el("p",{class:"note", style:"margin:0", text:"Choose your name and enter your PIN. Anyone can view; you need to sign in to make changes."}),
-    el("div",{class:"f"}, el("label",{for:"si-who", text:"Name"}), who),
-    el("div",{class:"f"}, el("label",{for:"si-pin", text:"PIN"}), pin),
-    msg, el("div",{}, go));
-  const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label":"Sign in"},
-    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Vibe Coding Project Progress"}), el("h2",{text:"Sign in to edit"})),
-      el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")), form);
-  $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
-  if (people.length === 1) { who.value = people[0].id; pin.focus(); } else who.focus();
-}
-$("#authBtn") && $("#authBtn").addEventListener("click", () => {
-  if (editor){ store.set(PIN_KEY, ""); applyAccess(); render(); toast("Signed out"); } else openSignIn();
-});
+const editor = "";    // no sign-in: changes are recorded as "Manager"
 // Sort for the Tasks table. Task numbers run in the order tasks were added, so "latest" = highest number.
 const SORTS = {latest:["order",-1], oldest:["order",1], priority:["priority",1], due:["due",1], status:["status",1]};
 let [sortKey, sortDir] = SORTS[store.get("pm.sort")] || SORTS.latest;
@@ -228,7 +168,7 @@ function setView(v){
 function render(){
   $("#addBtn").hidden = !(canManage && canWrite) || view !== "list";
   const b = $("#banner"); b.replaceChildren();
-  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, pinMode && pinsSet() ? "You're viewing the tracker. Sign in with your name and PIN to make changes." : "You can view this tracker. Ask the owner for Contributor access to update tasks."));
+  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, "You can view this tracker. Ask the owner for Contributor access to update tasks."));
   if (view === "settings"){
     // Don't rebuild the form under someone mid-edit; internal changes call renderSettings() directly.
     if (!sDirty || !$("#v-settings").childElementCount) renderSettings();
@@ -781,18 +721,11 @@ function renderSettings(){
 
   // Team
   const teamPanel = el("div",{class:"panel"}, el("h2",{text:"Team"}),
-    el("table",{class:"stable"}, thead("#","Assignee","PIN",""), el("tbody",{}, ...d.team.map((m,i) => el("tr",{},
+    el("table",{class:"stable"}, thead("#","Assignee",""), el("tbody",{}, ...d.team.map((m,i) => el("tr",{},
       el("td",{class:"idx",text:i+1}), el("td",{}, inp(m,"name",{label:"Assignee name", ph:"Name"})),
-      el("td",{class:"pin"}, ro ? el("span",{class:"note", text: m.pinHash ? "PIN set" : "No PIN"}) : (() => {
-        // Only a new PIN is typed here; the saved one is never shown.
-        const i = el("input",{type:"password", inputmode:"numeric", maxlength:"8", autocomplete:"new-password", class:"si w-pin",
-          placeholder: m.pinHash ? "•••• (set)" : "Set PIN", "aria-label":`${m.name} PIN`});
-        i.value = m._pin || "";
-        i.addEventListener("input", () => { i.value = i.value.replace(/\D/g,""); m._pin = i.value; touch(); });
-        return i; })()),
       el("td",{class:"x"}, rm(m.name, () => { d.team.splice(i,1); redraw(); })))))),
     add("Add person", () => { d.team.push({id:uid("m"), name:""}); redraw(); }),
-    el("p",{class:"note", text:"Each person signs in with their name and a 4–8 digit PIN. Once anyone has a PIN, only signed-in people can make changes. Type a new PIN to change it. Renaming someone also updates the tasks assigned to them."}));
+    el("p",{class:"note", text:"Renaming someone also updates the tasks assigned to them."}));
 
   // System / Module per project
   const modPanels = d.projects.map(p => el("div",{class:"panel"},
@@ -820,13 +753,7 @@ function renderSettings(){
 }
 
 async function saveSettings(){
-  const bad = sDraft.team.find(m => m._pin && !/^\d{4,8}$/.test(m._pin));
-  if (bad) return toast(`PIN for ${bad.name || "the new person"} must be 4–8 digits`);
-  const hashes = {};
-  for (const m of sDraft.team) if (m._pin) hashes[m.id] = await pinHash(m.id, m._pin);
-  const firstPins = !pinsSet() && Object.keys(hashes).length;
   const s = normSettings(sDraft);
-  s.team = s.team.map(m => ({...m, pinHash: hashes[m.id] || m.pinHash}));
   s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim()})).filter(m=>m.name)})).filter(p => p.name);
   s.team = s.team.map(m => ({...m, name:m.name.trim()})).filter(m => m.name);
   s.priorities = s.priorities.map(x=>x.trim()).filter(Boolean);
@@ -845,11 +772,7 @@ async function saveSettings(){
   try {
     await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"});
     for (const t of moved) await dbRef.doc("tasks/"+t.id).update({project: pRen[t.project] || t.project, assignees:(t.assignees||[]).map(a => mRen[a] || a)});
-    // Changing your own PIN keeps you signed in.
-    const me_ = currentUser() || (() => { try { return JSON.parse(store.get(PIN_KEY)||"null"); } catch { return null; } })();
-    if (me_ && hashes[me_.id]) store.set(PIN_KEY, JSON.stringify({id:me_.id, h:hashes[me_.id]}));
-    sDirty = false; applySettings(s); applyAccess(); refreshPickers(); renderSettings(); render();
-    if (firstPins && !editor) toast("PINs saved. Sign in with your name and PIN to keep editing.");
+    sDirty = false; applySettings(s); refreshPickers(); renderSettings(); render();
     toast(moved.length ? `Settings saved · ${moved.length} task${moved.length===1?"":"s"} updated` : "Settings saved");
   } catch(e){ toast("Could not save settings: " + (e && (e.message||e.code))); }
 }
@@ -1094,7 +1017,7 @@ function watchSettings(db){
   db.collection("settings").onSnapshot(snap => {
     const doc = snap.docs.find(d => d.id === "config");
     applySettings(doc ? doc.data() : window.SEED_SETTINGS);
-    applyAccess(); refreshPickers(); render();
+    refreshPickers(); render();
   }, () => {});
 }
 
@@ -1191,11 +1114,11 @@ setView(view);
   const cfg = window.SUPABASE_CONFIG || {};
   const cfgOk = cfg.url && cfg.anonKey && !/YOUR[-_]/i.test(cfg.url + cfg.anonKey);
   if ((!claude || !claude.use) && cfgOk && window.supabase && window.supabase.createClient){
-    // Supabase mode: shared, live data. Anyone can view; editing needs name + PIN once PINs are set.
+    // Supabase mode: shared, live data. No sign-in: anyone who opens the page can view and edit.
     const sb = window.supabase.createClient(cfg.url, cfg.anonKey, {auth:{persistSession:false, autoRefreshToken:false}});
     const db = makeSupabaseDb(sb);
     dbRef = db; window.trackerDb = db;
-    pinMode = true; baseEdit = true; applyAccess();
+    canManage = canWrite = true;
     watchSettings(db);
     db.collection("tasks").onSnapshot(snap => {
       tasks = snap.docs.map(d => fromDoc(d));
@@ -1206,8 +1129,8 @@ setView(view);
   }
   if (cfgOk && !window.supabase) console.warn("Supabase library did not load; using browser-only storage.");
   if (!claude || !claude.use){
-    // Standalone mode: browser-only storage; same PIN rule.
-    pinMode = true; baseEdit = true; applyAccess();
+    // Standalone mode: browser-only storage, full editing for whoever opens the page.
+    canManage = true; canWrite = true;
     const db = makeLocalDb({tasks: window.SEED_TASKS || []});
     dbRef = db; window.trackerDb = db;
     watchSettings(db);
