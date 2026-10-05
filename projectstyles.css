@@ -333,3 +333,29 @@ table.vtable tfoot td:first-child{text-align:left}
 /* Sign in */
 .auth{display:flex;align-items:center;gap:8px;min-width:0}
 #authWho{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Milestone progress (overview) */
+.ms-proj{padding:14px 0 6px;border-top:1px solid var(--line)}
+.ms-proj:first-of-type{border-top:0;padding-top:2px}
+.ms-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.ms-head > b{font:600 15px var(--f-display)}
+.ms-pct{display:flex;align-items:center;gap:8px;margin-left:auto}
+.ms-pct .bar{width:120px;height:8px}
+.ms-pct b{font-size:13px;min-width:36px;text-align:right}
+.msteps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:16px 3px}
+.mstep{min-width:0}
+.ms-track{position:relative;height:24px;display:flex;align-items:center}
+.ms-track::before{content:"";position:absolute;left:0;right:0;top:50%;height:6px;transform:translateY(-50%);background:var(--sc)}
+.mstep[data-s="Upcoming"] .ms-track::before{background:var(--sunk)}
+.mstep:first-child .ms-track::before{border-radius:4px 0 0 4px}
+.mstep:last-child .ms-track::before{border-radius:0 4px 4px 0}
+.ms-dot{position:relative;z-index:1;margin-left:6px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;
+  font:600 11px var(--f-mono);background:var(--surface);border:2px solid var(--sc);color:var(--sc)}
+.mstep[data-s="Complete"] .ms-dot{background:var(--sc);color:var(--surface)}
+.mstep[data-s="In Progress"] .ms-dot{box-shadow:0 0 0 3px var(--s-ip-bg)}
+.ms-nm{font-size:12.5px;font-weight:500;line-height:1.3;margin-top:7px;padding-right:10px}
+.mstep small{display:block;font:11px var(--f-mono);color:var(--muted);margin-top:2px}
+.mstep:hover .ms-nm{text-decoration:underline}
+/* Settings: module status picker */
+.stable td.mst{width:140px}
+.si.mstat{font-size:12.5px;font-weight:500}
+.si.mstat[data-s="Upcoming"]{color:var(--s-ns)} .si.mstat[data-s="In Progress"]{color:var(--s-ip)} .si.mstat[data-s="Complete"]{color:var(--s-ok)}

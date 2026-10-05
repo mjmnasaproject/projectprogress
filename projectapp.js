@@ -4,11 +4,18 @@ const SCLS = {"Urgent":"st-ug","Not Started":"st-ns","In Progress":"st-ip","On H
 const SVAR = {"Urgent":"--s-ug","Not Started":"--s-ns","In Progress":"--s-ip","On Hold":"--s-oh","Complete":"--s-ok","Cancelled":"--s-cx"};
 // Projects, team, types and priorities come from the Settings tab (seeded from SEED_SETTINGS in data.js).
 let SETTINGS, PROJECTS = [], TEAM = [], TYPES = [], PRIS = [];
+// Project modules are milestones: {name, status} with status Upcoming / In Progress / Complete.
+const MSTAT = ["Upcoming","In Progress","Complete"];
+const MVAR = {"Upcoming":"--s-ns","In Progress":"--s-ip","Complete":"--s-ok"};
+function normModule(m){
+  if (typeof m === "string") return {name:m, status:"Upcoming"};
+  m = m || {}; return {name:m.name||"", status: MSTAT.includes(m.status) ? m.status : "Upcoming"};
+}
 function normSettings(s){
   s = s || {};
   return {
     projects: (s.projects||[]).map((p,i) => ({id:p.id||"p"+i, name:p.name||"", code:p.code||"", start:p.start||"",
-      duration: p.duration === "" || p.duration == null ? "" : Number(p.duration), actualEnd:p.actualEnd||"", modules:[...(p.modules||[])]})),
+      duration: p.duration === "" || p.duration == null ? "" : Number(p.duration), actualEnd:p.actualEnd||"", modules:(p.modules||[]).map(normModule)})),
     priorities: [...(s.priorities||[])], types: [...(s.types||[])],
     valueRate: s.valueRate === "" || s.valueRate == null ? "" : Number(s.valueRate),
     team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||""}))
@@ -219,6 +226,8 @@ function renderOverview(){
       el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("value")}, "Open value analysis →")),
     valueTiles(list), topValue(list));
 
+  const milestones = milestoneChart();
+
   // status charts
   const charts = el("div",{class:"charts"}, statusDonut(list), statusByProject(list), completionColumns(list));
 
@@ -264,7 +273,7 @@ function renderOverview(){
   });
   const pplPanel = el("div",{class:"panel"}, el("h2",{text:"Team workload"}), ppl);
 
-  $("#v-overview").replaceChildren(kpis, valuePanel, charts,
+  $("#v-overview").replaceChildren(kpis, valuePanel, milestones, charts,
     el("div",{class:"grid2"}, el("div",{class:"stack"}, monthPanel, pplPanel), el("div",{class:"stack"}, attnPanel)));
 }
 
@@ -327,6 +336,29 @@ function completionColumns(list){
         el("div",{class:"cc-track"}, el("i",{style:`height:${r.v}%`}, el("span",{class:"num", text:r.v+"%"}))),
         el("small",{text:r.p.key})))))
     : el("p",{class:"note",text:"No tasks for this selection."}));
+}
+
+// Milestone progress: each project's modules from Settings, in order, coloured by status (with icon + label).
+function milestoneChart(){
+  const fp = $("#fProject").value;
+  const projs = PROJECTS.filter(p => (!fp || p.key === fp) && p.modules.length);
+  const head = el("div",{class:"phead"}, el("h2",{text:"Milestone progress"}),
+    el("div",{class:"legend", style:"margin:0"}, ...MSTAT.map(s => el("span",{}, el("i",{style:`background:var(${MVAR[s]})`}), s))));
+  if (!projs.length) return el("div",{class:"panel"}, head,
+    el("p",{class:"note", style:"margin:0"}, "No modules yet. Add them under Settings → Project details, then set each one to Upcoming, In Progress or Complete. ",
+      el("button",{class:"btn addrow", style:"margin:0 0 0 6px", onclick:()=>setView("settings")}, "Open Settings")));
+  return el("div",{class:"panel milestones"}, head, ...projs.map(p => {
+    const c = s => p.modules.filter(m => m.status === s).length, n = p.modules.length, done = c("Complete");
+    return el("div",{class:"ms-proj"},
+      el("div",{class:"ms-head"},
+        el("b",{text:p.key}),
+        el("span",{class:"note num", text:`${done} of ${n} complete · ${c("In Progress")} in progress · ${c("Upcoming")} upcoming`}),
+        el("div",{class:"ms-pct"}, el("div",{class:"bar"}, el("i",{style:`width:${pctOf(done,n)}%;background:var(--s-ok)`})), el("b",{class:"num", text:pctOf(done,n)+"%"}))),
+      el("ol",{class:"msteps"}, ...p.modules.map((m,i) => el("li",{class:"mstep", style:`--sc:var(${MVAR[m.status]})`, "data-s":m.status, "data-tip":`${i+1}. ${m.name} — ${m.status}`},
+        el("div",{class:"ms-track"}, el("span",{class:"ms-dot", "aria-hidden":"true", text: m.status==="Complete" ? "✓" : String(i+1)})),
+        el("div",{class:"ms-nm", text:m.name}),
+        el("small",{text:m.status})))));
+  }));
 }
 
 // One tooltip for every [data-tip] mark.
@@ -701,10 +733,16 @@ function renderSettings(){
     el("div",{class:"eyebrow", text:`${p.name || "New project"} project details`}),
     el("h2",{style:"margin-top:4px", text:"System / Module"}),
     p.modules.length ? el("table",{class:"stable"}, el("tbody",{}, ...p.modules.map((m,i) => el("tr",{},
-      el("td",{class:"idx",text:i+1}), el("td",{}, inp(p.modules,i,{label:`${p.name} module ${i+1}`, ph:"System or module name"})),
-      el("td",{class:"x"}, rm(m, () => { p.modules.splice(i,1); redraw(); }))))))
+      el("td",{class:"idx",text:i+1}), el("td",{}, inp(m,"name",{label:`${p.name} module ${i+1}`, ph:"System or module name"})),
+      el("td",{class:"mst"}, (() => {
+        const sel = el("select",{class:"si mstat", "data-s":m.status, "aria-label":`${m.name} status`, disabled: ro||null},
+          ...MSTAT.map(x => el("option",{value:x, text:x})));
+        sel.value = m.status;
+        sel.addEventListener("change", () => { m.status = sel.value; sel.dataset.s = sel.value; touch(); });
+        return sel; })()),
+      el("td",{class:"x"}, rm(m.name, () => { p.modules.splice(i,1); redraw(); }))))))
       : el("p",{class:"note", text:"No systems or modules yet."}),
-    add("Add module", () => { p.modules.push(""); redraw(); })));
+    add("Add module", () => { p.modules.push({name:"", status:"Upcoming"}); redraw(); })));
 
   paintBar();
   root.replaceChildren(el("div",{class:"settings"},
@@ -717,7 +755,7 @@ function renderSettings(){
 
 async function saveSettings(){
   const s = normSettings(sDraft);
-  s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>m.trim()).filter(Boolean)})).filter(p => p.name);
+  s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim()})).filter(m=>m.name)})).filter(p => p.name);
   s.team = s.team.map(m => ({...m, name:m.name.trim()})).filter(m => m.name);
   s.priorities = s.priorities.map(x=>x.trim()).filter(Boolean);
   s.types = s.types.map(x=>x.trim()).filter(Boolean);
@@ -986,7 +1024,7 @@ function watchSettings(db){
 
 
 // ---------- Supabase ----------
-// Used when supabase-config.js has your Project URL and anon key. Tables: public.tasks and public.settings
+// Used when supabaseconfig.js has your Project URL and anon key. Tables: public.tasks and public.settings
 // (see supabase_schema.sql). The app's field names are mapped to the table's column names here.
 const TASK_MAP = {start:"start_date", due:"due_date", end:"end_date", cancelled:"cancelled_date", order:"sort_order",
   createdAt:"created_at", updatedAt:"updated_at", updatedBy:"updated_by"};
@@ -1097,7 +1135,7 @@ function openSignIn(){
     el("div",{class:"f"}, el("label",{for:"si-pw", text:"Password"}), pw),
     msg, el("div",{}, go));
   const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label":"Sign in"},
-    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Vibe Coding Tracker"}), el("h2",{text:"Sign in to edit"})),
+    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Vibe Coding Project Progress"}), el("h2",{text:"Sign in to edit"})),
       el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")), form);
   $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
   email.focus();
