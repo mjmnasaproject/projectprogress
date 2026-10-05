@@ -61,6 +61,8 @@ const VIEWS = [...TASK_VIEWS, "value", "settings"];
 if (VIEWS.includes(location.hash.slice(1))) view = location.hash.slice(1);
 else { const v = store.get("pm.view"); if (VIEWS.includes(v)) view = v; }
 const me = ""; // no "I am" picker: whoever can edit the tracker updates any task
+let editor = "";      // signed-in Supabase user (email), recorded as "Last update by"
+let authClient = null, session = null;
 // Sort for the Tasks table. Task numbers run in the order tasks were added, so "latest" = highest number.
 const SORTS = {latest:["order",-1], oldest:["order",1], priority:["priority",1], due:["due",1], status:["status",1]};
 let [sortKey, sortDir] = SORTS[store.get("pm.sort")] || SORTS.latest;
@@ -160,7 +162,7 @@ function setView(v){
 function render(){
   $("#addBtn").hidden = !(canManage && canWrite) || view !== "list";
   const b = $("#banner"); b.replaceChildren();
-  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, "You can view this tracker. Ask the owner for Contributor access to update tasks."));
+  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, authClient ? "You're viewing the tracker. Sign in to make changes." : "You can view this tracker. Ask the owner for Contributor access to update tasks."));
   if (view === "settings"){
     // Don't rebuild the form under someone mid-edit; internal changes call renderSettings() directly.
     if (!sDirty || !$("#v-settings").childElementCount) renderSettings();
@@ -382,11 +384,11 @@ let valueOnly = store.get("pm.valueOnly") === "1";
 async function saveValue(t, k, raw){
   const v = {...(t.value||{})};
   if (raw === "") delete v[k]; else v[k] = Number(raw);
-  try { await dbRef.doc("tasks/"+t.id).update({value:v, updatedAt:new Date().toISOString(), updatedBy:"Manager"}); }
+  try { await dbRef.doc("tasks/"+t.id).update({value:v, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); }
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
 async function saveRate(raw){
-  try { await dbRef.collection("settings").doc("config").set({...SETTINGS, valueRate: raw === "" ? "" : Number(raw), updatedAt:new Date().toISOString(), updatedBy:"Manager"}); toast("Default rate saved"); }
+  try { await dbRef.collection("settings").doc("config").set({...SETTINGS, valueRate: raw === "" ? "" : Number(raw), updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); toast("Default rate saved"); }
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
 
@@ -731,7 +733,7 @@ async function saveSettings(){
   SETTINGS.team.forEach(m => { const n = s.team.find(x=>x.id===m.id); if (n && m.name && n.name !== m.name) mRen[m.name] = n.name; });
   const moved = tasks.filter(t => pRen[t.project] || (t.assignees||[]).some(a => mRen[a]));
   try {
-    await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: me || "Manager"});
+    await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"});
     for (const t of moved) await dbRef.doc("tasks/"+t.id).update({project: pRen[t.project] || t.project, assignees:(t.assignees||[]).map(a => mRen[a] || a)});
     sDirty = false; applySettings(s); refreshPickers(); renderSettings();
     toast(moved.length ? `Settings saved · ${moved.length} task${moved.length===1?"":"s"} updated` : "Settings saved");
@@ -849,7 +851,7 @@ function openSheet(id, prefill){
 
   async function save(){
     if (full && !draft.name.trim()){ toast("Give the task a name first"); return; }
-    const by = me || (canManage ? "Manager" : "Someone");
+    const by = editor || (canManage ? "Manager" : "Someone");
     const body = full ? {project:draft.project, type:draft.type, name:draft.name.trim(), priority:draft.priority, status:draft.status,
       assignees:draft.assignees, start:draft.start||"", due:draft.due||"", end:draft.end||"", cancelled:draft.cancelled||"", link:draft.link||"", notes:draft.notes||""}
       : {status:draft.status, start:draft.start||"", end:draft.end||"", cancelled:draft.cancelled||"", notes:draft.notes||""};
@@ -916,13 +918,13 @@ $("#addBtn").addEventListener("click", () => openSheet("new"));
 
 async function setPriority(t, p){
   if (!canEditStatus(t)){ toast("Only the tracker owner can update tasks"); return; }
-  try { await dbRef.doc("tasks/"+t.id).update({priority:p, updatedAt:new Date().toISOString(), updatedBy:"Manager"}); toast(`Marked ${p} priority`); }
+  try { await dbRef.doc("tasks/"+t.id).update({priority:p, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); toast(`Marked ${p} priority`); }
   catch(e){ toast("Could not update: " + (e.message||e.code)); }
 }
 
 async function setStatus(t, s){
   if (!canEditStatus(t)){ toast("Only the tracker owner can update tasks"); return; }
-  const body = {status:s, updatedAt:new Date().toISOString(), updatedBy: me || "Manager"};
+  const body = {status:s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"};
   if (s==="Complete" && !t.end) body.end = TODAY;
   if (s==="In Progress" && !t.start) body.start = TODAY;
   if (s!=="Complete" && t.status==="Complete") body.end = "";
@@ -982,6 +984,129 @@ function watchSettings(db){
   }, () => {});
 }
 
+
+// ---------- Supabase ----------
+// Used when supabase-config.js has your Project URL and anon key. Tables: public.tasks and public.settings
+// (see supabase_schema.sql). The app's field names are mapped to the table's column names here.
+const TASK_MAP = {start:"start_date", due:"due_date", end:"end_date", cancelled:"cancelled_date", order:"sort_order",
+  createdAt:"created_at", updatedAt:"updated_at", updatedBy:"updated_by"};
+const SET_MAP = {valueRate:"value_rate", updatedAt:"updated_at", updatedBy:"updated_by"};
+const COLS = {
+  tasks: new Set(["id","project","type","name","priority","status","assignees","start_date","due_date","end_date","cancelled_date",
+    "link","notes","sort_order","modifies","value","created_at","updated_at","updated_by"]),
+  settings: new Set(["id","projects","priorities","types","team","value_rate","updated_at","updated_by"])
+};
+const DATE_COLS = new Set(["start_date","due_date","end_date","cancelled_date"]);
+const mapFor = table => table === "tasks" ? TASK_MAP : SET_MAP;
+function toRow(table, obj){
+  const map = mapFor(table), r = {};
+  for (const [k,v] of Object.entries(obj||{})){
+    const c = map[k] || k; if (!COLS[table].has(c)) continue;
+    if (DATE_COLS.has(c)) r[c] = v || null;
+    else if (c === "value_rate") r[c] = v === "" || v == null ? null : Number(v);
+    else if (c === "modifies") r[c] = v || null;
+    else r[c] = v;
+  }
+  return r;
+}
+function fromRow(table, row){
+  const inv = Object.fromEntries(Object.entries(mapFor(table)).map(([a,b]) => [b,a])), o = {};
+  for (const [c,v] of Object.entries(row||{})){
+    const k = inv[c] || c;
+    if (DATE_COLS.has(c)) o[k] = v || "";
+    else if (v == null && ["link","notes","type"].includes(k)) o[k] = "";
+    else if (v == null && (k === "modifies" || k === "valueRate")) { if (k === "valueRate") o[k] = ""; }
+    else o[k] = v;
+  }
+  return o;
+}
+function makeSupabaseDb(sb){
+  const reloads = {};
+  const wrap = e => ({code: (e && (e.code === "42501" || /row-level security|permission|JWT/i.test(e.message||""))) ? "invalid_argument" : "unavailable",
+    message: e && e.message ? e.message : String(e)});
+  const notSaved = {code:"invalid_argument", message:"Not saved. Sign in first (or the item no longer exists)."};
+  const after = table => { const r = reloads[table]; if (r) r(); };
+  const docRef = (table, id) => ({
+    async set(body){ const {error} = await sb.from(table).upsert({...toRow(table, body), id}); if (error) throw wrap(error); after(table); },
+    async update(body){ const {data, error} = await sb.from(table).update(toRow(table, body)).eq("id", id).select("id");
+      if (error) throw wrap(error); if (!data || !data.length) throw notSaved; after(table); },
+    async delete(){ const {data, error} = await sb.from(table).delete().eq("id", id).select("id");
+      if (error) throw wrap(error); if (!data || !data.length) throw notSaved; after(table); }
+  });
+  return {
+    doc(path){ const [t, id] = path.split("/"); return docRef(t, id); },
+    collection(table){ return {
+      doc: id => docRef(table, id),
+      onSnapshot(fn, onErr){
+        const rows = new Map();
+        const emit = () => { const docs = [...rows.values()].map(o => ({id:o.id, data:() => o})); fn({docs, size:docs.length, empty:!docs.length}); };
+        const load = async () => {
+          const {data, error} = await sb.from(table).select("*");
+          if (error){ onErr && onErr(wrap(error)); return; }
+          rows.clear(); (data||[]).forEach(r => rows.set(r.id, fromRow(table, r))); emit();
+        };
+        reloads[table] = load;
+        // Live updates: other people's changes arrive here without a refresh.
+        const ch = sb.channel("rt-" + table)
+          .on("postgres_changes", {event:"*", schema:"public", table}, p => {
+            if (p.eventType === "DELETE") { if (p.old && p.old.id) rows.delete(p.old.id); }
+            else if (p.new && p.new.id) rows.set(p.new.id, fromRow(table, p.new));
+            emit();
+          })
+          .subscribe();
+        document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+        load();
+        return () => { sb.removeChannel(ch); delete reloads[table]; };
+      }
+    }; }
+  };
+}
+
+// ---------- sign in ----------
+function paintAuth(){
+  const b = $("#authBtn"), w = $("#authWho"); if (!b) return;
+  b.hidden = !authClient; w.hidden = !authClient || !session;
+  b.textContent = session ? "Sign out" : "Sign in";
+  w.textContent = session ? (session.user.email || "") : "";
+}
+async function setupAuth(sb){
+  const apply = s => {
+    session = s || null; canManage = canWrite = !!session;
+    editor = session ? (session.user.email || "Signed-in user") : "";
+    paintAuth(); render();
+    if (openId === "signin" && session) closeSheet();
+  };
+  const {data} = await sb.auth.getSession(); apply(data && data.session);
+  sb.auth.onAuthStateChange((_e, s) => apply(s));
+}
+function openSignIn(){
+  openId = "signin";
+  const msg = el("p",{class:"late-tag", role:"alert", style:"margin:0;white-space:normal"});
+  const email = el("input",{id:"si-email", type:"email", autocomplete:"username", required:true});
+  const pw = el("input",{id:"si-pw", type:"password", autocomplete:"current-password", required:true});
+  const go = el("button",{class:"btn primary", type:"submit"}, "Sign in");
+  const form = el("form",{class:"body", onsubmit: async e => {
+    e.preventDefault(); msg.textContent = ""; go.disabled = true; go.textContent = "Signing in…";
+    const {error} = await authClient.auth.signInWithPassword({email: email.value.trim(), password: pw.value});
+    go.disabled = false; go.textContent = "Sign in";
+    if (error) msg.textContent = /invalid/i.test(error.message) ? "Wrong email or password." : error.message;
+    else toast("Signed in");
+  }},
+    el("p",{class:"note", style:"margin:0", text:"Sign in with the account the tracker owner created for you in Supabase. Anyone can view; only signed-in people can make changes."}),
+    el("div",{class:"f"}, el("label",{for:"si-email", text:"Email"}), email),
+    el("div",{class:"f"}, el("label",{for:"si-pw", text:"Password"}), pw),
+    msg, el("div",{}, go));
+  const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label":"Sign in"},
+    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Vibe Coding Tracker"}), el("h2",{text:"Sign in to edit"})),
+      el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")), form);
+  $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
+  email.focus();
+}
+$("#authBtn") && $("#authBtn").addEventListener("click", async () => {
+  if (!authClient) return;
+  if (session){ await authClient.auth.signOut(); toast("Signed out"); } else openSignIn();
+});
+
 // "Urgent" was briefly a status; such tasks now read as In Progress + High priority.
 function fromDoc(d){
   const t = {...d.data(), id:d.id};
@@ -994,6 +1119,24 @@ setView(view);
 
 (async () => {
   const claude = window.claude;
+  const cfg = window.SUPABASE_CONFIG || {};
+  const cfgOk = cfg.url && cfg.anonKey && !/YOUR[-_]/i.test(cfg.url + cfg.anonKey);
+  if ((!claude || !claude.use) && cfgOk && window.supabase && window.supabase.createClient){
+    // Supabase mode: shared, live data. Anyone can view; signed-in users can edit.
+    authClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+    const db = makeSupabaseDb(authClient);
+    dbRef = db; window.trackerDb = db;
+    canManage = canWrite = false;
+    await setupAuth(authClient);
+    watchSettings(db);
+    db.collection("tasks").onSnapshot(snap => {
+      tasks = snap.docs.map(d => fromDoc(d));
+      loaded = true; refreshPickers(); render();
+      if (openId && !["new","signin"].includes(openId) && !tasks.find(x=>x.id===openId)) closeSheet();
+    }, e => { loaded = true; render(); toast("Couldn't load tasks from Supabase: " + e.message); });
+    return;
+  }
+  if (cfgOk && !window.supabase) console.warn("Supabase library did not load; using browser-only storage.");
   if (!claude || !claude.use){
     // Standalone mode: browser-only storage, full editing for whoever opens the page.
     canManage = true; canWrite = true;

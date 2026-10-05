@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Vibe Coding Project Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="projectstyles.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><h1>Vibe Coding Tracker</h1><small id="asof"></small></div>
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button role="tab" data-view="overview" aria-selected="true">Overview</button>
+      <button role="tab" data-view="board" aria-selected="false">Board</button>
+      <button role="tab" data-view="timeline" aria-selected="false">Timeline</button>
+      <button role="tab" data-view="list" aria-selected="false">Tasks</button>
+      <button role="tab" data-view="value" aria-selected="false">Value analysis</button>
+      <button role="tab" data-view="settings" aria-selected="false">Settings</button>
+    </nav>
+    <div class="auth"><span id="authWho" class="note" hidden></span><button class="btn" id="authBtn" type="button" hidden>Sign in</button></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="filters" id="filters">
+    <select id="fProject" aria-label="Project"><option value="">All projects</option></select>
+    <select id="fPerson" aria-label="Person"><option value="">Everyone</option></select>
+    <select id="fStatus" aria-label="Status"><option value="">Any status</option></select>
+    <select id="fPri" aria-label="Priority"><option value="">Any priority</option></select>
+    <select id="fMonth" aria-label="Month" hidden><option value="">All months</option></select>
+    <select id="fYear" aria-label="Year" hidden><option value="">All years</option></select>
+    <input type="search" id="fSearch" placeholder="Search tasks" aria-label="Search tasks">
+    <label class="chk"><input type="checkbox" id="fOpen"> Open tasks only</label>
+    <span class="spacer"></span>
+    <select id="fSort" aria-label="Sort tasks" hidden>
+      <option value="" hidden>Custom sort</option>
+      <option value="latest">Latest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="priority">Priority: high to low</option>
+      <option value="due">Due date: soonest</option>
+      <option value="status">Status</option>
+    </select>
+    <button class="btn primary" id="addBtn" hidden>+ New task</button>
+  </div>
+  <div id="banner"></div>
+
+  <section class="view" id="v-overview"></section>
+  <section class="view" id="v-board" hidden></section>
+  <section class="view" id="v-timeline" hidden></section>
+  <section class="view" id="v-list" hidden></section>
+  <section class="view" id="v-value" hidden></section>
+  <section class="view" id="v-settings" hidden></section>
+</main>
+
+<div id="sheetRoot"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
+<script src="supabase-config.js"></script>
+<script src="projectdata.js"></script>
+<script src="projectapp.js"></script>
+</body>
+</html>

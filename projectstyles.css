@@ -329,3 +329,7 @@ table.vtable td.total{font-weight:600;color:var(--accent)}
 table.vtable a.nm{color:var(--fg);text-decoration:none} table.vtable a.nm:hover{text-decoration:underline}
 table.vtable tfoot td{font-weight:600;border-top:2px solid var(--line);border-bottom:0;background:var(--sunk)}
 table.vtable tfoot td:first-child{text-align:left}
+
+/* Sign in */
+.auth{display:flex;align-items:center;gap:8px;min-width:0}
+#authWho{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
