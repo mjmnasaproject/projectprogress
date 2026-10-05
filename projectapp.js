@@ -68,8 +68,7 @@ const VIEWS = [...TASK_VIEWS, "value", "settings"];
 if (VIEWS.includes(location.hash.slice(1))) view = location.hash.slice(1);
 else { const v = store.get("pm.view"); if (VIEWS.includes(v)) view = v; }
 const me = ""; // no "I am" picker: whoever can edit the tracker updates any task
-let editor = "";      // signed-in Supabase user (email), recorded as "Last update by"
-let authClient = null, session = null;
+const editor = "";    // no sign-in: changes are recorded as "Manager"
 // Sort for the Tasks table. Task numbers run in the order tasks were added, so "latest" = highest number.
 const SORTS = {latest:["order",-1], oldest:["order",1], priority:["priority",1], due:["due",1], status:["status",1]};
 let [sortKey, sortDir] = SORTS[store.get("pm.sort")] || SORTS.latest;
@@ -169,7 +168,7 @@ function setView(v){
 function render(){
   $("#addBtn").hidden = !(canManage && canWrite) || view !== "list";
   const b = $("#banner"); b.replaceChildren();
-  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, authClient ? "You're viewing the tracker. Sign in to make changes." : "You can view this tracker. Ask the owner for Contributor access to update tasks."));
+  if (loaded && !canWrite) b.append(el("div",{class:"banner"}, "You can view this tracker. Ask the owner for Contributor access to update tasks."));
   if (view === "settings"){
     // Don't rebuild the form under someone mid-edit; internal changes call renderSettings() directly.
     if (!sDirty || !$("#v-settings").childElementCount) renderSettings();
@@ -1060,9 +1059,9 @@ function fromRow(table, row){
 }
 function makeSupabaseDb(sb){
   const reloads = {};
-  const wrap = e => ({code: (e && (e.code === "42501" || /row-level security|permission|JWT/i.test(e.message||""))) ? "invalid_argument" : "unavailable",
-    message: e && e.message ? e.message : String(e)});
-  const notSaved = {code:"invalid_argument", message:"Not saved. Sign in first (or the item no longer exists)."};
+  const wrap = e => ({code:"unavailable", message: e && /row-level security|permission|42501/i.test((e.code||"")+(e.message||""))
+    ? "Supabase refused the change. Its table policies need to allow edits without signing in." : (e && e.message ? e.message : String(e))});
+  const notSaved = {code:"unavailable", message:"Not saved. Supabase didn't accept the change: check the table policies allow edits (or the item no longer exists)."};
   const after = table => { const r = reloads[table]; if (r) r(); };
   const docRef = (table, id) => ({
     async set(body){ const {error} = await sb.from(table).upsert({...toRow(table, body), id}); if (error) throw wrap(error); after(table); },
@@ -1100,51 +1099,6 @@ function makeSupabaseDb(sb){
   };
 }
 
-// ---------- sign in ----------
-function paintAuth(){
-  const b = $("#authBtn"), w = $("#authWho"); if (!b) return;
-  b.hidden = !authClient; w.hidden = !authClient || !session;
-  b.textContent = session ? "Sign out" : "Sign in";
-  w.textContent = session ? (session.user.email || "") : "";
-}
-async function setupAuth(sb){
-  const apply = s => {
-    session = s || null; canManage = canWrite = !!session;
-    editor = session ? (session.user.email || "Signed-in user") : "";
-    paintAuth(); render();
-    if (openId === "signin" && session) closeSheet();
-  };
-  const {data} = await sb.auth.getSession(); apply(data && data.session);
-  sb.auth.onAuthStateChange((_e, s) => apply(s));
-}
-function openSignIn(){
-  openId = "signin";
-  const msg = el("p",{class:"late-tag", role:"alert", style:"margin:0;white-space:normal"});
-  const email = el("input",{id:"si-email", type:"email", autocomplete:"username", required:true});
-  const pw = el("input",{id:"si-pw", type:"password", autocomplete:"current-password", required:true});
-  const go = el("button",{class:"btn primary", type:"submit"}, "Sign in");
-  const form = el("form",{class:"body", onsubmit: async e => {
-    e.preventDefault(); msg.textContent = ""; go.disabled = true; go.textContent = "Signing in…";
-    const {error} = await authClient.auth.signInWithPassword({email: email.value.trim(), password: pw.value});
-    go.disabled = false; go.textContent = "Sign in";
-    if (error) msg.textContent = /invalid/i.test(error.message) ? "Wrong email or password." : error.message;
-    else toast("Signed in");
-  }},
-    el("p",{class:"note", style:"margin:0", text:"Sign in with the account the tracker owner created for you in Supabase. Anyone can view; only signed-in people can make changes."}),
-    el("div",{class:"f"}, el("label",{for:"si-email", text:"Email"}), email),
-    el("div",{class:"f"}, el("label",{for:"si-pw", text:"Password"}), pw),
-    msg, el("div",{}, go));
-  const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label":"Sign in"},
-    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Vibe Coding Project Progress"}), el("h2",{text:"Sign in to edit"})),
-      el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")), form);
-  $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
-  email.focus();
-}
-$("#authBtn") && $("#authBtn").addEventListener("click", async () => {
-  if (!authClient) return;
-  if (session){ await authClient.auth.signOut(); toast("Signed out"); } else openSignIn();
-});
-
 // "Urgent" was briefly a status; such tasks now read as In Progress + High priority.
 function fromDoc(d){
   const t = {...d.data(), id:d.id};
@@ -1160,17 +1114,16 @@ setView(view);
   const cfg = window.SUPABASE_CONFIG || {};
   const cfgOk = cfg.url && cfg.anonKey && !/YOUR[-_]/i.test(cfg.url + cfg.anonKey);
   if ((!claude || !claude.use) && cfgOk && window.supabase && window.supabase.createClient){
-    // Supabase mode: shared, live data. Anyone can view; signed-in users can edit.
-    authClient = window.supabase.createClient(cfg.url, cfg.anonKey);
-    const db = makeSupabaseDb(authClient);
+    // Supabase mode: shared, live data. No sign-in: anyone who opens the page can view and edit.
+    const sb = window.supabase.createClient(cfg.url, cfg.anonKey, {auth:{persistSession:false, autoRefreshToken:false}});
+    const db = makeSupabaseDb(sb);
     dbRef = db; window.trackerDb = db;
-    canManage = canWrite = false;
-    await setupAuth(authClient);
+    canManage = canWrite = true;
     watchSettings(db);
     db.collection("tasks").onSnapshot(snap => {
       tasks = snap.docs.map(d => fromDoc(d));
       loaded = true; refreshPickers(); render();
-      if (openId && !["new","signin"].includes(openId) && !tasks.find(x=>x.id===openId)) closeSheet();
+      if (openId && openId !== "new" && !tasks.find(x=>x.id===openId)) closeSheet();
     }, e => { loaded = true; render(); toast("Couldn't load tasks from Supabase: " + e.message); });
     return;
   }
