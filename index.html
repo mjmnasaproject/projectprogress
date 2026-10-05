@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="projectstyles.css">
+<link rel="stylesheet" href="projectstyles.css?v=20261005-3">
 </head>
 <body>
 <header class="top">
@@ -21,6 +21,7 @@
       <button role="tab" data-view="value" aria-selected="false">Value analysis</button>
       <button role="tab" data-view="settings" aria-selected="false">Settings</button>
     </nav>
+    <div class="auth"><span id="authWho" class="note" hidden></span><button class="btn" id="authBtn" type="button" hidden>Sign in</button></div>
   </div>
 </header>
 
@@ -58,8 +59,8 @@
 <div id="sheetRoot"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
-<script src="supabaseconfig.js"></script>
-<script src="projectdata.js"></script>
-<script src="projectapp.js"></script>
+<script src="supabaseconfig.js?v=20261005-3"></script>
+<script src="projectdata.js?v=20261005-3"></script>
+<script src="projectapp.js?v=20261005-3"></script>
 </body>
 </html>

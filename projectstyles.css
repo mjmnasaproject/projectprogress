@@ -356,3 +356,11 @@ table.vtable tfoot td:first-child{text-align:left}
 .stable td.mst{width:140px}
 .si.mstat{font-size:12.5px;font-weight:500}
 .si.mstat[data-s="Upcoming"]{color:var(--s-ns)} .si.mstat[data-s="In Progress"]{color:var(--s-ip)} .si.mstat[data-s="Complete"]{color:var(--s-ok)}
+
+/* PIN sign-in */
+.auth{display:flex;align-items:center;gap:8px;min-width:0}
+#authWho{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:var(--fg)}
+.stable td.pin{width:130px}
+.si.w-pin{width:120px;font-family:var(--f-mono);letter-spacing:.1em}
+#si-who,#si-pin{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+#si-pin{font-family:var(--f-mono);letter-spacing:.3em}
