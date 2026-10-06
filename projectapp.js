@@ -17,9 +17,13 @@ function normSettings(s){
   s = s || {};
   return {
     projects: (s.projects||[]).map((p,i) => ({id:p.id||"p"+i, name:p.name||"", code:p.code||"", start:p.start||"",
-      duration: p.duration === "" || p.duration == null ? "" : Number(p.duration), actualEnd:p.actualEnd||"", modules:(p.modules||[]).map(normModule)})),
+      duration: p.duration === "" || p.duration == null ? "" : Number(p.duration), actualEnd:p.actualEnd||"", modules:(p.modules||[]).map(normModule),
+      baForm: p.baForm == null ? /^nursery/i.test(p.name||"") : !!p.baForm,
+      expenses: (p.expenses||[]).map((e,j) => ({id:e.id||`e${i}-${j}`, name:e.name||"", amount: e.amount === "" || e.amount == null ? "" : Number(e.amount), shared: !!e.shared}))})),
     priorities: [...(s.priorities||[])], types: [...(s.types||[])],
     valueRate: s.valueRate === "" || s.valueRate == null ? "" : Number(s.valueRate),
+    valueRates: {print: s.valueRates && s.valueRates.print != null && s.valueRates.print !== "" ? Number(s.valueRates.print) : "",
+                 ba: s.valueRates && s.valueRates.ba != null && s.valueRates.ba !== "" ? Number(s.valueRates.ba) : ""},
     team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||""}))
   };
 }
@@ -164,6 +168,7 @@ function setView(v){
   $("#fMonth").hidden = v !== "board";
   $("#fYear").hidden = !["board","overview"].includes(v);
   $("#fPerson").hidden = $("#fOpen").closest("label").hidden = v === "value";
+  $("#fSearch").placeholder = v === "value" ? "Search modules" : "Search tasks";
   render();
 }
 
@@ -316,35 +321,36 @@ function statusByProject(list){
   const rows = PROJECTS.map(p => [p, list.filter(t=>t.project===p.key)]).filter(([,ts]) => ts.length);
   const used = CHART_ST.filter(s => list.some(t=>t.status===s));
   return el("div",{class:"panel"}, el("h2",{text:"Status by project"}),
-    rows.length ? el("div",{class:"sbp"}, el("div",{class:"sbp-rows"},
+    rows.length ? el("div",{class:"sbp"},
       ...rows.map(([p,ts]) => el("div",{class:"sbp-row"},
         el("div",{class:"sbp-nm", text:p.key}),
         el("div",{class:"sbp-bar", role:"img", "aria-label":`${p.key}: `+used.map(s=>`${s} ${ts.filter(t=>t.status===s).length}`).join(", ")},
           ...used.map(s => { const n = ts.filter(t=>t.status===s).length; if (!n) return null; const w = 100*n/ts.length;
             return el("i",{style:`width:${w}%;background:var(${SVAR[s]})`, "data-tip":`${p.key} · ${s}: ${n} of ${ts.length} (${Math.round(w)}%)`}, w >= 7 ? el("span",{text:n}) : null); })),
-        el("div",{class:"sbp-n num", text:ts.length})))),
+        el("div",{class:"sbp-n num", text:ts.length}))),
       el("div",{class:"sbp-axis"}, el("span"), el("div",{}, ...[0,25,50,75,100].map(v => el("span",{style:`left:${v}%`, text:v+"%"}))), el("span")),
       legend(used))
     : el("p",{class:"note",text:"No tasks for this selection."}));
 }
 
-// Complete vs incomplete (Not Started + In Progress + On Hold) per project; cancelled tasks are left out.
+// Two bars per project: complete % and incomplete % (Not Started + In Progress + On Hold). Cancelled tasks are left out.
 function completionColumns(list){
   const rows = PROJECTS.map(p => { const ts = list.filter(t=>t.project===p.key), live = ts.filter(t=>t.status!=="Cancelled");
-    const d = ts.filter(t=>t.status==="Complete").length, n = live.length;
-    const v = pctOf(d, n); return {p, d, n, v, inc: n - d, iv: n ? 100 - v : 0}; }).filter(r => r.n);
-  const seg = (cls, h, label, tip) => h ? el("i",{class:cls, style:`height:${h}%`, "data-tip":tip}, h >= 9 ? el("span",{class:"num", text:label}) : null) : null;
+    const d = ts.filter(t=>t.status==="Complete").length, n = live.length, v = pctOf(d, n);
+    return {p, d, n, v, inc: n - d, iv: n ? 100 - v : 0}; }).filter(r => r.n);
+  const bar = (cls, h, tip) => el("i",{class:cls, style:`height:${h}%`, "data-tip":tip}, el("span",{class:"num", text:h+"%"}));
   return el("div",{class:"panel"}, el("h2",{text:"% complete by project"}),
-    rows.length ? el("div",{class:"ccwrap"}, el("div",{class:"colchart"},
+    rows.length ? el("div",{class:"colchart"},
       el("div",{class:"cc-grid"}, ...[100,75,50,25,0].map(v => el("div",{}, el("span",{text:v+"%"})))),
       el("div",{class:"cc-cols"}, ...rows.map(r => el("div",{class:"cc-col", role:"img", "aria-label":`${r.p.key}: ${r.v}% complete, ${r.iv}% incomplete`},
-        el("div",{class:"cc-track"}, el("div",{class:"cc-stack"},
-          seg("cc-inc", r.iv, r.iv+"%", `${r.p.key} · Incomplete: ${r.inc} of ${r.n} tasks (${r.iv}%)`),
-          seg("cc-done", r.v, r.v+"%", `${r.p.key} · Complete: ${r.d} of ${r.n} tasks (${r.v}%)`))),
-        el("small",{text:r.p.key}))))),
-      el("div",{class:"legend"}, el("span",{}, el("i",{style:"background:var(--s-ok)"}), "Complete"),
-        el("span",{"data-tip":"Not Started + In Progress + On Hold"}, el("i",{style:"background:var(--s-ns-bg);box-shadow:inset 0 0 0 1px var(--line)"}), "Incomplete")))
-    : el("p",{class:"note",text:"No tasks for this selection."}));
+        el("div",{class:"cc-track"},
+          bar("cc-done", r.v, `${r.p.key} · Complete: ${r.d} of ${r.n} tasks (${r.v}%)`),
+          bar("cc-inc", r.iv, `${r.p.key} · Incomplete: ${r.inc} of ${r.n} tasks (${r.iv}%) — not started, in progress or on hold`)),
+        el("small",{text:r.p.key})))))
+    : el("p",{class:"note",text:"No tasks for this selection."}),
+    rows.length ? el("div",{class:"legend"},
+      el("span",{}, el("i",{style:"background:var(--s-ok)"}), "Complete"),
+      el("span",{"data-tip":"Not Started + In Progress + On Hold"}, el("i",{style:"background:var(--s-ns)"}), "Incomplete")) : null);
 }
 
 // Milestone progress: each project's modules from Settings, in order, coloured by status (with icon + label).
@@ -379,23 +385,38 @@ function milestoneChart(){
 })();
 
 // ---------- value analysis ----------
-// Per module (Settings → Project details): vendor quote vs in-house build cost (cost saving), manual hours per month
-// before vs after (time saving), valued at the module's hourly rate or the default rate. Stored on the module as m.value.
+// Monthly cost savings per module (Settings → Project details), following the Value Analysis sheet:
+//   Direct labour time cost savings = staff × RM per staff
+//   Cancelled subscription savings  = RM a month (entered)
+//   Physical cost savings           = printing pages a month × RM per page + rewritten BA form pages a month × RM per page
+//   Total cost savings (monthly)    = all of the above
+//   Time savings (hours, not added to the RM total) = manual hours a month before − after
+// BA form rewriting only applies to projects ticked "BA form" in Settings (Nursery by default).
+const RATE_DEFAULTS = {labour:10, print:0.10, ba:0.56};
 const num = x => x === "" || x == null || isNaN(+x) ? null : +x;
-const rm = n => n == null ? "—" : (n < 0 ? "−" : "") + "RM " + Math.abs(Math.round(n)).toLocaleString("en-MY");
-const hrs = n => n == null ? "—" : Math.round(n).toLocaleString("en-MY") + " h";
-function valueOf(item){
-  const v = item.value || {};
-  const quote = num(v.quote), cost = num(v.cost), before = num(v.before), after = num(v.after);
-  const rate = num(v.rate) ?? num(SETTINGS.valueRate);
-  const costSave = quote == null ? null : quote - (cost || 0);
-  const hrsMonth = before == null ? null : before - (after || 0);
-  const hrsYear = hrsMonth == null ? null : hrsMonth * 12;
-  const timeVal = hrsYear == null || rate == null ? null : hrsYear * rate;
-  return {quote, cost, before, after, rate, costSave, hrsMonth, hrsYear, timeVal,
-    total: (costSave||0) + (timeVal||0), has: quote != null || before != null};
+const rm = n => n == null ? "—" : (n < 0 ? "−" : "") + "RM " + Math.abs(n).toLocaleString("en-MY", {minimumFractionDigits:2, maximumFractionDigits:2});
+const rmRate = n => "RM" + Number(n).toFixed(2);
+const hrs = n => n == null ? "—" : (Math.round(n*10)/10).toLocaleString("en-MY") + " h";
+function rates(){
+  return {labour: num(SETTINGS.valueRate) ?? RATE_DEFAULTS.labour,
+    print: num(SETTINGS.valueRates && SETTINGS.valueRates.print) ?? RATE_DEFAULTS.print,
+    ba: num(SETTINGS.valueRates && SETTINGS.valueRates.ba) ?? RATE_DEFAULTS.ba};
 }
-// Modules of the projects in the current project filter, numbered like M-N1 per project.
+function valueOf(item){
+  const v = item.value || {}, R = rates();
+  const baOn = !item.p || item.p.baForm;
+  const staff = num(v.staff), subs = num(v.subs), print = num(v.print), ba = baOn ? num(v.ba) : null;
+  const before = num(v.before), after = num(v.after);
+  const hrsMonth = before == null ? null : before - (after || 0);
+  // Direct labour time cost = hours saved a month × staff (1 if blank) × RM per staff per hour.
+  const labour = hrsMonth == null ? null : hrsMonth * (staff ?? 1) * R.labour;
+  const printing = print == null ? null : print * R.print;
+  const baSave = ba == null ? null : ba * R.ba;
+  const physical = printing == null && baSave == null ? null : (printing||0) + (baSave||0);
+  return {staff, subs, print, ba, labour, printing, baSave, physical, before, after, hrsMonth, baOn,
+    total: (labour||0) + (subs||0) + (physical||0), has: [staff, subs, print, ba, before].some(x => x != null)};
+}
+// Modules of the projects in the current project filter, numbered like N-1 per project.
 function moduleRows(){
   const fp = $("#fProject").value;
   return PROJECTS.filter(p => !fp || p.key === fp)
@@ -404,23 +425,36 @@ function moduleRows(){
 function valueTotals(rows){
   const vs = rows.map(valueOf).filter(v => v.has);
   const sum = k => vs.reduce((a,v) => a + (v[k]||0), 0);
-  return {n: vs.length, costSave: sum("costSave"), hrsYear: sum("hrsYear"), timeVal: sum("timeVal"), total: sum("total")};
+  return {n: vs.length, labour: sum("labour"), subs: sum("subs"), printing: sum("printing"), baSave: sum("baSave"), physical: sum("physical"), total: sum("total"), hrsMonth: sum("hrsMonth")};
 }
+// Expenses: each belongs to one project, or is shared ("All projects") and split equally across every project in Settings.
+// Shared ones are stored on whichever project they were created under, flagged shared: true.
+const sharedExpenses = () => PROJECTS.flatMap(p => p.expenses.filter(e => e.shared).map(e => ({p, e})));
+const shareOf = e => (num(e.amount)||0) / Math.max(1, PROJECTS.length);
+// Rows for the current project filter, with the amount that counts for it (amt).
+function expenseRows(){
+  const fp = $("#fProject").value;
+  if (!fp) return PROJECTS.flatMap(p => p.expenses.map(e => ({p, e, amt: num(e.amount)||0})));
+  const own = PROJECTS.filter(p => p.key === fp).flatMap(p => p.expenses.filter(e => !e.shared).map(e => ({p, e, amt: num(e.amount)||0})));
+  return [...own, ...sharedExpenses().map(r => ({...r, amt: shareOf(r.e)}))];
+}
+const expenseTotal = list => list.reduce((a,r) => a + r.amt, 0);
 function valueTiles(rows){
-  const v = valueTotals(rows), r = num(SETTINGS.valueRate);
-  const tile = (label, value, sub) => el("div",{class:"kpi"}, el("div",{class:"eyebrow",text:label}), el("b",{text:value}), el("span",{class:"sub",text:sub}));
+  const v = valueTotals(rows), ex = expenseTotal(expenseRows()), net = v.total - ex;
+  const tile = (label, value, sub, cls) => el("div",{class:"kpi"+(cls?" "+cls:"")}, el("div",{class:"eyebrow",text:label}), el("b",{text:value}), el("span",{class:"sub",text:sub}));
   return el("div",{class:"kpis vtiles"},
-    tile("Cost savings", rm(v.costSave), "vendor quotes minus build cost"),
-    tile("Time saved", hrs(v.hrsYear), `per year · ${hrs(v.hrsYear/12)} a month`),
-    tile("Value of time saved", rm(v.timeVal), r == null ? "set a default hourly rate" : `per year · default RM ${r}/h`),
-    tile("Total value", rm(v.total), `first year · ${v.n} module${v.n===1?"":"s"} with savings`));
+    tile("Time saved", hrs(v.hrsMonth), `a month · ${hrs(v.hrsMonth*12)} a year`),
+    tile("Total cost savings", rm(v.total), `a month · labour ${rm(v.labour)} + subscriptions ${rm(v.subs)} + physical ${rm(v.physical)}`),
+    tile("Expenses", rm(ex), "a month"),
+    tile("Net savings", rm(net), `a month · ${rm(net*12)} a year`, net < 0 ? "alert" : "net"));
 }
 function topValue(rows){
   const top = rows.map(r => [r, valueOf(r)]).filter(([,v]) => v.has && v.total > 0).sort((a,b) => b[1].total - a[1].total).slice(0,5);
-  if (!top.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add vendor quotes and hours saved for each module on the Value analysis page."});
+  if (!top.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add them for each module on the Value analysis page."});
   const mx = top[0][1].total;
-  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top modules by first-year value"}),
-    ...top.map(([r,v]) => el("div",{class:"tv-row", tabindex:"0", onclick:()=>setView("value"), "data-tip":`${r.p.key} · ${r.name}: ${rm(v.costSave)} cost + ${rm(v.timeVal)} time`},
+  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top modules by monthly cost savings"}),
+    ...top.map(([r,v]) => el("div",{class:"tv-row", tabindex:"0", onclick:()=>setView("value"),
+        "data-tip":`${r.p.key} · ${r.name}: labour ${rm(v.labour)} + subscriptions ${rm(v.subs||0)} + physical ${rm(v.physical||0)} a month`},
       el("div",{class:"tv-nm"}, el("span",{class:"code", text:r.no+" "}), r.name, el("span",{class:"code", text:"  · "+r.p.key})),
       el("div",{class:"tv-bar"}, el("i",{style:`width:${100*v.total/mx}%`})),
       el("b",{class:"num", text:rm(v.total)}))));
@@ -436,53 +470,138 @@ async function saveModuleValue(pid, name, k, raw){
   try { await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); }
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
-async function saveRate(raw){
-  try { await dbRef.collection("settings").doc("config").set({...SETTINGS, valueRate: raw === "" ? "" : Number(raw), updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); toast("Default rate saved"); }
+// Expenses live on each project in the settings document (no extra Supabase column needed).
+async function saveExpenses(change){
+  const s = normSettings(SETTINGS);
+  change(s);
+  try { await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); }
+  catch(e){ toast("Could not save: " + (e.message||e.code)); }
+}
+const findExp = (s, id) => { for (const p of s.projects){ const i = p.expenses.findIndex(e => e.id === id); if (i >= 0) return {p, i}; } return null; };
+async function saveRate(which, raw){
+  const s = normSettings(SETTINGS), v = raw === "" ? "" : Number(raw);
+  if (which === "labour") s.valueRate = v; else s.valueRates[which] = v;
+  try { await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); toast("Rate saved"); }
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
 
 const MCLS = {"Upcoming":"st-ns","In Progress":"st-ip","Complete":"st-ok"};
+// Net savings per project: own module savings − own expenses − its share of shared expenses.
+function netByProject(){
+  const fp = $("#fProject").value, N = Math.max(1, PROJECTS.length);
+  const sharedTotal = sharedExpenses().reduce((a,{e}) => a + (num(e.amount)||0), 0);
+  const rows = PROJECTS.filter(p => !fp || p.key === fp).map(p => {
+    const sav = valueTotals(p.modules.map((m,i) => ({p, m, i, value:m.value}))).total;
+    const own = p.expenses.filter(e => !e.shared).reduce((a,e) => a + (num(e.amount)||0), 0);
+    const share = sharedTotal / N;
+    return {p, sav, own, share, net: sav - own - share};
+  });
+  const sum = k => rows.reduce((a,r) => a + r[k], 0);
+  const c = (n, cls) => el("td",{class:"calc"+(cls?" "+cls:"")+(cls==="netc" && n<0?" neg":""), text:rm(n)});
+  return el("div",{class:"panel netproj"},
+    el("div",{class:"phead"}, el("h2",{text:"Net savings by project"}), el("span",{class:"note", text:`Monthly · shared expenses ${rm(sharedTotal)} ÷ ${N} projects = ${rm(sharedTotal/N)} each`})),
+    el("div",{class:"swrap"}, el("table",{class:"stable tasks"},
+      el("thead",{}, el("tr",{}, ...["Project","Total cost savings","Own expenses","Share of shared expenses","Net savings","A year"].map(h => el("th",{scope:"col", text:h})))),
+      el("tbody",{}, ...rows.map(r => el("tr",{}, el("td",{}, el("b",{text:r.p.key})), c(r.sav), c(r.own), c(r.share), c(r.net, "netc"), c(r.net*12)))),
+      rows.length > 1 ? el("tfoot",{}, el("tr",{}, el("td",{text:"All projects"}), c(sum("sav")), c(sum("own")), c(sum("share")), c(sum("net"), "netc"), c(sum("net")*12))) : null)));
+}
+function expensesPanel(ed){
+  // Oldest first, so a newly added expense always appears at the bottom.
+  const list = expenseRows().sort((a,b) => a.e.id.localeCompare(b.e.id)), fp = $("#fProject").value;
+  const projSel = (e, p) => { const sel = el("select",{class:"si", "aria-label":"Expense project", disabled: ed?null:true},
+      el("option",{value:"all", text:"All projects (shared)"}), ...PROJECTS.map(x => el("option",{value:x.id, text:x.key})));
+    sel.value = e.shared ? "all" : p.id;
+    sel.addEventListener("change", () => saveExpenses(s => { const f = findExp(s, e.id); if (!f) return;
+      if (sel.value === "all"){ f.p.expenses[f.i].shared = true; return; }
+      const [item] = f.p.expenses.splice(f.i,1); item.shared = false;
+      const to = s.projects.find(x => x.id === sel.value); to && to.expenses.push(item); }));
+    return sel; };
+  const N = Math.max(1, PROJECTS.length);
+  const field = (e, key, attrs) => { if (!ed) return el("span",{class: key==="amount"?"num":"", text: key==="amount" ? rm(num(e.amount)) : e.name});
+    const i = el("input",{class:"si"+(key==="amount"?" vin":""), id:`exp-${e.id}-${key}`, ...attrs}); i.value = e[key] ?? "";
+    i.addEventListener("change", () => setTimeout(() => saveExpenses(s => { const f = findExp(s, e.id); if (!f) return;
+      f.p.expenses[f.i][key] = key==="amount" ? (i.value === "" ? "" : Number(i.value)) : i.value.trim(); }), 0));
+    return i; };
+  const addTo = (PROJECTS.find(p => p.key === fp) || PROJECTS[0]);
+  return el("div",{class:"panel expenses"},
+    el("div",{class:"phead"}, el("h2",{text:"Expenses"}), el("span",{class:"note", text:`${rm(expenseTotal(list))} a month · subtracted from total cost savings to give net savings · shared expenses are split across ${N} projects`})),
+    list.length ? el("table",{class:"stable"},
+      el("thead",{}, el("tr",{}, ...["#","Project","Expense","RM / month","Counted",""].map(h => el("th",{scope:"col", text:h})))),
+      el("tbody",{}, ...list.map(({p,e,amt},i) => el("tr",{},
+        el("td",{class:"idx", text:i+1}),
+        el("td",{class:"ex-proj"}, projSel(e, p)),
+        el("td",{}, field(e, "name", {type:"text", placeholder:"e.g. AI tool subscription", "aria-label":"Expense"})),
+        el("td",{class:"ex-amt"}, field(e, "amount", {type:"number", min:"0", step:"any", "aria-label":"Expense RM per month"})),
+        el("td",{class:"ex-cnt num", "data-tip": e.shared ? `Shared: ${rm(num(e.amount)||0)} ÷ ${N} projects = ${rm(shareOf(e))} each` : "Counted in full for this project"},
+          e.shared && fp ? `${rm(amt)} (÷${N})` : e.shared ? `${rm(amt)} · ${rm(shareOf(e))} each` : rm(amt)),
+        el("td",{class:"x"}, ed ? el("button",{class:"rm", "aria-label":"Remove expense", onclick:() => saveExpenses(s => { const f = findExp(s, e.id); if (f) f.p.expenses.splice(f.i,1); })}, "×") : null)))))
+      : el("p",{class:"note", style:"margin:0", text:"No expenses yet."}),
+    ed && addTo ? el("button",{class:"btn addrow", onclick:() => saveExpenses(s => { const p = s.projects.find(x => x.id === addTo.id); p && p.expenses.push({id:"e"+Date.now().toString(36), name:"", amount:""}); })}, "+ Add expense") : null);
+}
 function renderValue(){
   const ed = canManage && canWrite;
   const q = $("#fSearch").value.trim().toLowerCase();
-  const all = moduleRows();
+  const all = moduleRows(), R = rates();
+  const showBA = all.some(r => r.p.baForm);   // hide the BA form columns when no listed project uses them
   const list = all.filter(r => (!valueOnly || valueOf(r).has) && (!q || (r.name + " " + r.p.key).toLowerCase().includes(q)));
   // Save after focus has moved on, so Tab lands in the next box once the table redraws.
   const cell = (r, k, ph) => ed
     ? (() => { const i = el("input",{type:"number", min:"0", step:"any", class:"si vin", id:`val-${r.p.id}-${r.i}-${k}`, placeholder:ph||"", "aria-label":`${r.name} ${k}`});
         i.value = (r.value||{})[k] ?? ""; i.addEventListener("change", () => setTimeout(() => saveModuleValue(r.p.id, r.name, k, i.value), 0)); return i; })()
     : el("span",{class:"num", text: num((r.value||{})[k]) ?? ""});
-  const rate = num(SETTINGS.valueRate);
+  const calc = (n, cls) => el("td",{class:"calc"+(cls?" "+cls:""), text: n == null ? "" : rm(n)});
   const rows = list.map(r => { const v = valueOf(r);
     return el("tr",{},
       el("td",{class:"code", text:r.no}),
       el("td",{}, el("div",{class:"nm", text:r.name})),
       el("td",{text:r.p.key}), el("td",{}, el("span",{class:"pill "+MCLS[r.m.status], text:r.m.status})),
-      el("td",{}, cell(r,"quote")), el("td",{}, cell(r,"cost")), el("td",{class:"calc", text: v.costSave==null?"":rm(v.costSave)}),
-      el("td",{}, cell(r,"before")), el("td",{}, cell(r,"after")), el("td",{class:"calc", text: v.hrsYear==null?"":hrs(v.hrsYear)}),
-      el("td",{}, cell(r,"rate", rate==null?"":String(rate))), el("td",{class:"calc", text: v.timeVal==null?"":rm(v.timeVal)}),
-      el("td",{class:"calc total", text: v.has ? rm(v.total) : ""}));
+      el("td",{class:"gl"}, cell(r,"before")), el("td",{}, cell(r,"after")), el("td",{class:"calc", text: v.hrsMonth == null ? "" : hrs(v.hrsMonth)}),
+      el("td",{class:"gl"}, cell(r,"staff")), calc(v.labour),
+      el("td",{class:"gl"}, cell(r,"subs")),
+      el("td",{class:"gl"}, cell(r,"print")), calc(v.printing),
+      ...(showBA ? (v.baOn ? [el("td",{}, cell(r,"ba")), calc(v.baSave)]
+        : [el("td",{class:"na", colspan:"2", title:"BA form rewriting isn't tracked for this project (Settings → Project key dates)", text:"n/a"})]) : []),
+      calc(v.has ? v.total : null, "total gl"));
   });
-  const T = valueTotals(list);
-  const rateIn = ed ? el("input",{type:"number", min:"0", step:"any", class:"si w-num", id:"val-rate", value: rate ?? "", placeholder:"e.g. 25", "aria-label":"Default hourly rate"}) : el("b",{text: rate==null ? "not set" : `RM ${rate}`});
-  if (ed) rateIn.addEventListener("change", () => saveRate(rateIn.value));
+  const T = valueTotals(list), EX = expenseTotal(expenseRows());
+  const span = 4 + 3 + 2 + 1 + 2 + (showBA ? 2 : 0);   // every column before "Total"
+  const rateIn = (which, val, label) => ed
+    ? (() => { const i = el("input",{type:"number", min:"0", step:"any", class:"si w-num", id:`val-rate-${which}`, "aria-label":label}); i.value = val;
+        i.addEventListener("change", () => saveRate(which, i.value)); return i; })()
+    : el("b",{text:rmRate(val)});
   const only = el("label",{class:"chk"}, el("input",{type:"checkbox", checked: valueOnly||null, onchange:e=>{ valueOnly = e.target.checked; store.set("pm.valueOnly", valueOnly?"1":"0"); render(); }}), " Only modules with savings entered");
   const toSettings = el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("settings")}, "Edit modules in Settings");
+  const th = (text, a={}) => el("th",{scope:"col", ...a, text});
 
   $("#v-value").replaceChildren(
     el("div",{class:"panel", style:"margin-top:14px"},
       el("div",{class:"phead"}, el("h2",{text:"Value analysis"}),
-        el("div",{class:"rate"}, el("span",{class:"note", text:"Default hourly rate (RM)"}), rateIn)),
+        el("div",{class:"rates"},
+          el("label",{class:"rate"}, el("span",{class:"note", text:"Labour RM / staff / hour"}), rateIn("labour", R.labour, "Labour rate per staff")),
+          el("label",{class:"rate"}, el("span",{class:"note", text:"Printing RM / page"}), rateIn("print", R.print, "Printing cost per page")),
+          showBA ? el("label",{class:"rate"}, el("span",{class:"note", text:"BA form RM / page"}), rateIn("ba", R.ba, "BA form rewriting cost per page")) : null)),
       valueTiles(all),
-      el("p",{class:"note", style:"margin:0", text:"One row per module from Settings → Project details. Cost saving = vendor quote − build cost. Time saved = (manual hours a month before − after) × 12. Value of time = time saved × hourly rate (the module's own rate, or the default). Total = cost saving + one year of time value."})),
+      el("p",{class:"note", style:"margin:0", text:`One row per module from Settings → Project details. All figures are per month. Direct labour time cost = hours saved × staff (1 if blank) × ${rmRate(R.labour)} per staff per hour. Printing = pages a month × ${rmRate(R.print)}. BA form rewriting (projects ticked "BA form" in Settings) = pages a month × ${rmRate(R.ba)}. Total cost savings = labour + cancelled subscriptions + printing + BA forms. Net savings = total cost savings − expenses.`})),
+    expensesPanel(ed),
+    netByProject(),
     el("div",{class:"vbar"}, el("div",{class:"tcount", text:`${list.length} module${list.length===1?"":"s"}`}), el("span",{class:"spacer"}), only, toSettings),
     all.length ? el("div",{class:"tablewrap"}, el("table",{class:"tasks vtable"},
       el("thead",{},
-        el("tr",{class:"grp"}, el("th",{colspan:"4"}), el("th",{colspan:"3", text:"Cost"}), el("th",{colspan:"3", text:"Time (hours)"}), el("th",{colspan:"2", text:"Value of time"}), el("th")),
-        el("tr",{}, ...["No.","Module","Project","Status","Vendor quote (RM)","Build cost (RM)","Cost saving","Manual h/month before","After","Saved / year","Rate (RM/h)","Per year","Total value"].map(h => el("th",{scope:"col", text:h})))),
+        el("tr",{class:"grp"}, th("No.",{rowspan:"3"}), th("Module",{rowspan:"3"}), th("Project",{rowspan:"3"}), th("Status",{rowspan:"3"}),
+          th("Time Savings",{colspan:"3", class:"g"}),
+          th("Cost Savings",{colspan:"3", class:"g"}), th("Total Physical Cost Savings",{colspan: showBA ? "4" : "2", class:"g"}), th("Total Cost Savings (Monthly)",{rowspan:"3", class:"g"})),
+        el("tr",{class:"grp"}, th("Manual hours a month",{colspan:"3", class:"g"}),
+          th("Direct Labour Time Cost Savings",{colspan:"2", class:"g"}), th("Cancelled Subscription Savings (RM / month)",{rowspan:"2", class:"g"}),
+          th("Printing Cost",{colspan:"2", class:"g"}), showBA ? th("Cost Rewriting BA Form due to errors (Nursery)",{colspan:"2", class:"g"}) : null),
+        el("tr",{}, th("Before",{class:"gl"}), th("After"), th("Saved"), th("Staff",{class:"gl"}), th(`Saving (× ${rmRate(R.labour)} / staff / hr)`), th("Qty / Month",{class:"gl"}), th(`× ${rmRate(R.print)} / page`),
+          showBA ? th("Qty / Month") : null, showBA ? th(`× ${rmRate(R.ba)} / page`) : null)),
       el("tbody",{}, ...rows),
-      el("tfoot",{}, el("tr",{}, el("td",{colspan:"6", text:"Total"}), el("td",{class:"calc", text:rm(T.costSave)}), el("td",{colspan:"2"}),
-        el("td",{class:"calc", text:hrs(T.hrsYear)}), el("td"), el("td",{class:"calc", text:rm(T.timeVal)}), el("td",{class:"calc total", text:rm(T.total)})))))
+      el("tfoot",{}, el("tr",{}, el("td",{colspan:"4", text:"Total (monthly)"}),
+        el("td",{class:"gl"}), el("td"), el("td",{class:"calc", text:hrs(T.hrsMonth)}),
+        el("td",{class:"gl"}), calc(T.labour), calc(T.subs, "gl"), el("td",{class:"gl"}), calc(T.printing),
+        ...(showBA ? [el("td"), calc(T.baSave)] : []), calc(T.total, "total gl")),
+        el("tr",{class:"exp"}, el("td",{colspan: String(span), text:"Less: expenses (monthly)"}), el("td",{class:"calc gl", text: EX ? "− " + rm(EX) : rm(0)})),
+        el("tr",{class:"netrow"}, el("td",{colspan: String(span), text:"Net savings (monthly)"}), el("td",{class:"calc total gl"+(T.total-EX<0?" neg":""), text:rm(T.total - EX)})))))
     : el("div",{class:"empty"}, el("b",{text:"No modules yet"}), "Add modules for each project under Settings → Project details, and they'll appear here."));
 }
 
@@ -720,16 +839,18 @@ function renderSettings(){
       el("td",{}, ro ? el("span",{class:"date",text:p.start?fmtY(p.start):"—"}) : inp(p,"start",{type:"date", label:`${p.name} start date`, after:paintEnd})),
       el("td",{}, el("div",{class:"dur"}, inp(p,"duration",{type:"number", min:"1", cls:"w-num", label:`${p.name} duration in days`, after:paintEnd}), el("span",{class:"note",text:"days"}))),
       endCell, el("td",{}, actCell),
+      el("td",{}, el("input",{type:"checkbox", class:"bachk", "aria-label":`${p.name} has BA form rewriting savings`, checked: p.baForm || null, disabled: ro || null,
+        onchange:e => { p.baForm = e.target.checked; touch(); }})),
       el("td",{class:"num", text:n}),
       el("td",{}, rm(p.name, () => { d.projects.splice(i,1); redraw(); }, n ? `${n} task${n===1?" uses":"s use"} this project` : null)));
   });
   const projPanel = el("div",{class:"panel"},
     el("h2",{text:"Project key dates"}),
     el("div",{class:"swrap"}, el("table",{class:"stable wide"},
-      thead("#","Project name","Code","Start date","Duration","Est. end date","Actual end date","Tasks",""),
+      thead("#","Project name","Code","Start date","Duration","Est. end date","Actual end date","BA form","Tasks",""),
       el("tbody",{}, ...pRows))),
-    add("Add project", () => { d.projects.push({id:uid("p"), name:"", code:"", start:"", duration:180, actualEnd:"", modules:[]}); redraw(); }),
-    el("p",{class:"note", text:"Est. end date is the start date plus the duration. Renaming a project also moves its tasks to the new name."}));
+    add("Add project", () => { d.projects.push({id:uid("p"), name:"", code:"", start:"", duration:180, actualEnd:"", modules:[], baForm:false}); redraw(); }),
+    el("p",{class:"note", text:"Est. end date is the start date plus the duration. BA form: tick projects that track BA form rewriting savings on the Value analysis page. Renaming a project also moves its tasks to the new name."}));
 
   // Status / Priority / Type
   const statusPanel = el("div",{class:"panel"}, el("h2",{text:"Status"}),
@@ -779,7 +900,8 @@ async function saveSettings(){
   s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim()})).filter(m=>m.name)})).filter(p => p.name);
   // Module savings are edited on the Value analysis page, so keep the latest saved figures (matched by project + module name).
   s.projects.forEach(p => { const live = SETTINGS.projects.find(x => x.id === p.id);
-    p.modules.forEach(m => { const lm = live && live.modules.find(x => x.name === m.name); if (lm) m.value = {...lm.value}; }); });
+    p.modules.forEach(m => { const lm = live && live.modules.find(x => x.name === m.name); if (lm) m.value = {...lm.value}; });
+    if (live) p.expenses = live.expenses.map(e => ({...e})); });   // expenses are edited on the Value analysis page too
   s.team = s.team.map(m => ({...m, name:m.name.trim()})).filter(m => m.name);
   s.priorities = s.priorities.map(x=>x.trim()).filter(Boolean);
   s.types = s.types.map(x=>x.trim()).filter(Boolean);
@@ -1052,11 +1174,11 @@ function watchSettings(db){
 // (see supabase_schema.sql). The app's field names are mapped to the table's column names here.
 const TASK_MAP = {start:"start_date", due:"due_date", end:"end_date", cancelled:"cancelled_date", order:"sort_order",
   createdAt:"created_at", updatedAt:"updated_at", updatedBy:"updated_by"};
-const SET_MAP = {valueRate:"value_rate", updatedAt:"updated_at", updatedBy:"updated_by"};
+const SET_MAP = {valueRate:"value_rate", valueRates:"value_rates", updatedAt:"updated_at", updatedBy:"updated_by"};
 const COLS = {
   tasks: new Set(["id","project","type","name","priority","status","assignees","start_date","due_date","end_date","cancelled_date",
     "link","notes","sort_order","modifies","value","created_at","updated_at","updated_by"]),
-  settings: new Set(["id","projects","priorities","types","team","value_rate","updated_at","updated_by"])
+  settings: new Set(["id","projects","priorities","types","team","value_rate","value_rates","updated_at","updated_by"])
 };
 const DATE_COLS = new Set(["start_date","due_date","end_date","cancelled_date"]);
 const mapFor = table => table === "tasks" ? TASK_MAP : SET_MAP;
@@ -1089,7 +1211,15 @@ function makeSupabaseDb(sb){
   const notSaved = {code:"unavailable", message:"Not saved. Supabase didn't accept the change: check the table policies allow edits (or the item no longer exists)."};
   const after = table => { const r = reloads[table]; if (r) r(); };
   const docRef = (table, id) => ({
-    async set(body){ const {error} = await sb.from(table).upsert({...toRow(table, body), id}); if (error) throw wrap(error); after(table); },
+    async set(body){
+      const row = {...toRow(table, body), id};
+      let {error} = await sb.from(table).upsert(row);
+      // Older settings tables have no value_rates column yet: save everything else and use the default rates.
+      if (error && table === "settings" && /value_rates/.test(error.message || "")){
+        delete row.value_rates; ({error} = await sb.from(table).upsert(row));
+        if (!error) console.warn("settings.value_rates column missing; printing/BA form rates use defaults. Run: alter table public.settings add column value_rates jsonb;");
+      }
+      if (error) throw wrap(error); after(table); },
     async update(body){ const {data, error} = await sb.from(table).update(toRow(table, body)).eq("id", id).select("id");
       if (error) throw wrap(error); if (!data || !data.length) throw notSaved; after(table); },
     async delete(){ const {data, error} = await sb.from(table).delete().eq("id", id).select("id");

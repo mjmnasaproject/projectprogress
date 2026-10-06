@@ -113,7 +113,7 @@ h2{font:600 17px/1.2 var(--f-display);margin:0 0 12px}
 .pri.High{color:var(--late)} .pri.Medium{color:var(--s-oh)} .pri.Low{color:var(--muted)}
 
 /* Board */
-.board{display:grid;grid-template-columns:repeat(6,minmax(220px,1fr));gap:14px;overflow-x:auto;padding-bottom:8px}
+.board{margin-top:16px;display:grid;grid-template-columns:repeat(6,minmax(220px,1fr));gap:14px;overflow-x:auto;padding-bottom:8px}
 .col{background:var(--sunk);border-radius:12px;padding:10px;min-width:0;display:flex;flex-direction:column;gap:8px}
 .col.urgent{background:var(--s-ug-bg);box-shadow:inset 0 3px 0 var(--s-ug)}
 .col.urgent h3{color:var(--s-ug)}
@@ -297,29 +297,31 @@ table.stable.wide{min-width:860px}
 .sbp-axis > div{position:relative;height:16px;border-top:1px solid var(--line)}
 .sbp-axis > div span{position:absolute;top:2px;transform:translateX(-50%);font:10.5px var(--f-mono);color:var(--muted)}
 .sbp-axis > div span:first-child{transform:none} .sbp-axis > div span:last-child{transform:translateX(-100%)}
-.colchart{position:relative;height:210px;padding-left:38px}
-.cc-grid{position:absolute;inset:0 0 22px 38px;display:flex;flex-direction:column;justify-content:space-between}
+.colchart{position:relative;height:224px;padding-left:38px}
+.cc-grid{position:absolute;inset:14px 0 22px 38px;display:flex;flex-direction:column;justify-content:space-between}
 .cc-grid div{border-top:1px solid var(--line);height:0;position:relative}
 .cc-grid div:last-child{border-top-color:var(--muted)}
 .cc-grid span{position:absolute;right:calc(100% + 6px);top:-7px;font:10.5px var(--f-mono);color:var(--muted)}
-.cc-cols{position:absolute;inset:0 0 0 38px;display:flex;gap:10px;justify-content:space-around}
+.cc-cols{position:absolute;inset:14px 0 0 38px;display:flex;gap:10px;justify-content:space-around}
 .cc-col{flex:1;max-width:64px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:default}
 .cc-track{flex:1;width:100%;display:flex;align-items:flex-end;justify-content:center}
-.cc-track i{position:relative;display:block;width:min(40px,100%);background:var(--accent);border-radius:4px 4px 0 0;min-height:1px}
-.cc-col:hover .cc-track i{filter:brightness(1.1)}
-.cc-track i span{position:absolute;bottom:calc(100% + 3px);left:50%;transform:translateX(-50%);font:500 11px var(--f-mono);color:var(--fg);white-space:nowrap}
+.cc-track{gap:4px}
+.cc-track i{position:relative;display:block;width:min(22px,45%);border-radius:4px 4px 0 0;min-height:1px}
+.cc-track i.cc-done{background:var(--s-ok)}
+.cc-track i.cc-inc{background:var(--s-ns)}
+.cc-track i:hover{filter:brightness(1.1)}
+.cc-track i span{position:absolute;bottom:calc(100% + 3px);left:50%;transform:translateX(-50%);font:500 10px var(--f-mono);color:var(--fg);white-space:nowrap}
 .cc-col small{font-size:12px;color:var(--muted);height:16px;white-space:nowrap}
 .tip{position:fixed;z-index:70;pointer-events:none;background:var(--fg);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;max-width:300px;box-shadow:var(--shadow)}
 
 /* Value analysis */
 .rate{display:flex;align-items:center;gap:8px}
-.vbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:14px 2px 8px}
+.vbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:14px 2px 8px}
 .vbar .tcount{margin:0}
 .vbar .chk{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
 table.vtable{min-width:1180px}
 table.vtable thead th{white-space:normal;line-height:1.3;vertical-align:bottom}
-table.vtable thead th:nth-child(2){min-width:240px}
-table.vtable td:nth-child(2){min-width:240px}
+table.vtable tbody td:nth-child(2){min-width:220px}
 table.vtable tbody tr{cursor:default}
 table.vtable td{padding:6px 8px}
 table.vtable tr.grp th{border-bottom:0;padding-bottom:0;color:var(--fg)}
@@ -357,3 +359,41 @@ table.vtable tfoot td:first-child{text-align:left}
 .si.mstat{font-size:12.5px;font-weight:500}
 .si.mstat[data-s="Upcoming"]{color:var(--s-ns)} .si.mstat[data-s="In Progress"]{color:var(--s-ip)} .si.mstat[data-s="Complete"]{color:var(--s-ok)}
 
+
+
+/* Value analysis: sheet-style grouped header + rate inputs */
+.rates{display:flex;flex-wrap:wrap;gap:8px 16px}
+.rates .rate{display:flex;align-items:center;gap:6px}
+table.vtable thead th.g{text-align:center;border-left:1px solid var(--line);color:var(--fg)}
+table.vtable tr.grp th{border-bottom:1px solid var(--line);padding-bottom:6px}
+table.vtable{min-width:1250px}
+table.vtable thead th:nth-child(2){min-width:0;text-align:center}
+table.vtable thead tr:first-child th:nth-child(2){text-align:left}
+table.vtable .vin{width:80px}
+table.vtable td.na{color:var(--muted);font:12px var(--f-mono)}
+table.vtable .gl{border-left:1px solid var(--line)}
+.stable .bachk{width:16px;height:16px;accent-color:var(--accent)}
+table.vtable tfoot td:nth-child(2){min-width:0}
+
+/* Value analysis: centred headings, expenses, net savings */
+table.vtable thead th{text-align:center !important;vertical-align:middle !important}
+table.vtable tfoot tr.exp td{background:var(--surface);font-weight:500;color:var(--muted);border-top:1px solid var(--line)}
+table.vtable tfoot tr.netrow td{font-size:14px;border-top:2px solid var(--line)}
+table.vtable tfoot tr.exp td:first-child,table.vtable tfoot tr.netrow td:first-child{text-align:right;padding-right:16px}
+table.vtable td.neg{color:var(--late)}
+.expenses{margin-top:14px}
+.expenses .stable{max-width:760px}
+.expenses td.ex-proj{width:210px} .expenses td.ex-amt{width:130px}
+.expenses .stable td{text-align:left}
+.vtiles .kpi.net b{color:var(--accent)}
+.expenses td.ex-cnt{font:12.5px var(--f-mono);color:var(--muted);white-space:nowrap}
+.netproj{margin-top:14px}
+.netproj table{min-width:640px}
+.netproj th{text-align:center}
+.netproj td:first-child,.netproj th:first-child{text-align:left}
+.netproj td.calc{font:13px var(--f-mono);text-align:right}
+.netproj td.netc{font-weight:600;color:var(--accent)}
+.netproj td.neg{color:var(--late)}
+.netproj tfoot td{font-weight:600;border-top:2px solid var(--line);background:var(--sunk)}
+.netproj th:nth-child(2),.netproj td:nth-child(2){min-width:0;text-align:right}
+.netproj th:nth-child(2){text-align:center}
