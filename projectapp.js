@@ -8,8 +8,10 @@ let SETTINGS, PROJECTS = [], TEAM = [], TYPES = [], PRIS = [];
 const MSTAT = ["Upcoming","In Progress","Complete"];
 const MVAR = {"Upcoming":"--s-ns","In Progress":"--s-ip","Complete":"--s-ok"};
 function normModule(m){
-  if (typeof m === "string") return {name:m, status:"Upcoming"};
-  m = m || {}; return {name:m.name||"", status: MSTAT.includes(m.status) ? m.status : "Upcoming"};
+  if (typeof m === "string") return {name:m, status:"Upcoming", value:{}};
+  m = m || {};
+  return {name:m.name||"", status: MSTAT.includes(m.status) ? m.status : "Upcoming",
+    value: m.value && typeof m.value === "object" ? {...m.value} : {}};
 }
 function normSettings(s){
   s = s || {};
@@ -160,7 +162,8 @@ function setView(v){
   $("#fSort").hidden = v !== "list";
   $("#fStatus").hidden = $("#fPri").hidden = !(v === "list" || v === "timeline");
   $("#fMonth").hidden = v !== "board";
-  $("#fYear").hidden = !["board","overview","value"].includes(v);
+  $("#fYear").hidden = !["board","overview"].includes(v);
+  $("#fPerson").hidden = $("#fOpen").closest("label").hidden = v === "value";
   render();
 }
 
@@ -223,7 +226,7 @@ function renderOverview(){
   const valuePanel = el("div",{class:"panel"},
     el("div",{class:"phead"}, el("h2",{text:"Value delivered"}),
       el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("value")}, "Open value analysis →")),
-    valueTiles(list), topValue(list));
+    valueTiles(moduleRows()), topValue(moduleRows()));
 
   const milestones = milestoneChart();
 
@@ -313,27 +316,34 @@ function statusByProject(list){
   const rows = PROJECTS.map(p => [p, list.filter(t=>t.project===p.key)]).filter(([,ts]) => ts.length);
   const used = CHART_ST.filter(s => list.some(t=>t.status===s));
   return el("div",{class:"panel"}, el("h2",{text:"Status by project"}),
-    rows.length ? el("div",{class:"sbp"},
+    rows.length ? el("div",{class:"sbp"}, el("div",{class:"sbp-rows"},
       ...rows.map(([p,ts]) => el("div",{class:"sbp-row"},
         el("div",{class:"sbp-nm", text:p.key}),
         el("div",{class:"sbp-bar", role:"img", "aria-label":`${p.key}: `+used.map(s=>`${s} ${ts.filter(t=>t.status===s).length}`).join(", ")},
           ...used.map(s => { const n = ts.filter(t=>t.status===s).length; if (!n) return null; const w = 100*n/ts.length;
             return el("i",{style:`width:${w}%;background:var(${SVAR[s]})`, "data-tip":`${p.key} · ${s}: ${n} of ${ts.length} (${Math.round(w)}%)`}, w >= 7 ? el("span",{text:n}) : null); })),
-        el("div",{class:"sbp-n num", text:ts.length}))),
+        el("div",{class:"sbp-n num", text:ts.length})))),
       el("div",{class:"sbp-axis"}, el("span"), el("div",{}, ...[0,25,50,75,100].map(v => el("span",{style:`left:${v}%`, text:v+"%"}))), el("span")),
       legend(used))
     : el("p",{class:"note",text:"No tasks for this selection."}));
 }
 
+// Complete vs incomplete (Not Started + In Progress + On Hold) per project; cancelled tasks are left out.
 function completionColumns(list){
   const rows = PROJECTS.map(p => { const ts = list.filter(t=>t.project===p.key), live = ts.filter(t=>t.status!=="Cancelled");
-    const d = ts.filter(t=>t.status==="Complete").length; return {p, d, n:live.length, v:pctOf(d, live.length)}; }).filter(r => r.n);
+    const d = ts.filter(t=>t.status==="Complete").length, n = live.length;
+    const v = pctOf(d, n); return {p, d, n, v, inc: n - d, iv: n ? 100 - v : 0}; }).filter(r => r.n);
+  const seg = (cls, h, label, tip) => h ? el("i",{class:cls, style:`height:${h}%`, "data-tip":tip}, h >= 9 ? el("span",{class:"num", text:label}) : null) : null;
   return el("div",{class:"panel"}, el("h2",{text:"% complete by project"}),
-    rows.length ? el("div",{class:"colchart"},
+    rows.length ? el("div",{class:"ccwrap"}, el("div",{class:"colchart"},
       el("div",{class:"cc-grid"}, ...[100,75,50,25,0].map(v => el("div",{}, el("span",{text:v+"%"})))),
-      el("div",{class:"cc-cols"}, ...rows.map(r => el("div",{class:"cc-col", "data-tip":`${r.p.key}: ${r.d} of ${r.n} tasks complete (${r.v}%)`},
-        el("div",{class:"cc-track"}, el("i",{style:`height:${r.v}%`}, el("span",{class:"num", text:r.v+"%"}))),
-        el("small",{text:r.p.key})))))
+      el("div",{class:"cc-cols"}, ...rows.map(r => el("div",{class:"cc-col", role:"img", "aria-label":`${r.p.key}: ${r.v}% complete, ${r.iv}% incomplete`},
+        el("div",{class:"cc-track"}, el("div",{class:"cc-stack"},
+          seg("cc-inc", r.iv, r.iv+"%", `${r.p.key} · Incomplete: ${r.inc} of ${r.n} tasks (${r.iv}%)`),
+          seg("cc-done", r.v, r.v+"%", `${r.p.key} · Complete: ${r.d} of ${r.n} tasks (${r.v}%)`))),
+        el("small",{text:r.p.key}))))),
+      el("div",{class:"legend"}, el("span",{}, el("i",{style:"background:var(--s-ok)"}), "Complete"),
+        el("span",{"data-tip":"Not Started + In Progress + On Hold"}, el("i",{style:"background:var(--s-ns-bg);box-shadow:inset 0 0 0 1px var(--line)"}), "Incomplete")))
     : el("p",{class:"note",text:"No tasks for this selection."}));
 }
 
@@ -369,14 +379,13 @@ function milestoneChart(){
 })();
 
 // ---------- value analysis ----------
-// Per task: vendor quote vs in-house build cost (cost saving), manual hours per month before vs after (time saving),
-// valued at the task's hourly rate or the default rate. Stored on the task as t.value.
-const VALUE_KEYS = ["quote","cost","before","after","rate"];
+// Per module (Settings → Project details): vendor quote vs in-house build cost (cost saving), manual hours per month
+// before vs after (time saving), valued at the module's hourly rate or the default rate. Stored on the module as m.value.
 const num = x => x === "" || x == null || isNaN(+x) ? null : +x;
 const rm = n => n == null ? "—" : (n < 0 ? "−" : "") + "RM " + Math.abs(Math.round(n)).toLocaleString("en-MY");
 const hrs = n => n == null ? "—" : Math.round(n).toLocaleString("en-MY") + " h";
-function valueOf(t){
-  const v = t.value || {};
+function valueOf(item){
+  const v = item.value || {};
   const quote = num(v.quote), cost = num(v.cost), before = num(v.before), after = num(v.after);
   const rate = num(v.rate) ?? num(SETTINGS.valueRate);
   const costSave = quote == null ? null : quote - (cost || 0);
@@ -386,36 +395,45 @@ function valueOf(t){
   return {quote, cost, before, after, rate, costSave, hrsMonth, hrsYear, timeVal,
     total: (costSave||0) + (timeVal||0), has: quote != null || before != null};
 }
-function valueTotals(list){
-  const vs = list.map(valueOf).filter(v => v.has);
+// Modules of the projects in the current project filter, numbered like M-N1 per project.
+function moduleRows(){
+  const fp = $("#fProject").value;
+  return PROJECTS.filter(p => !fp || p.key === fp)
+    .flatMap(p => p.modules.map((m,i) => ({p, m, i, value:m.value, name:m.name, no:`${p.code}-${i+1}`})));
+}
+function valueTotals(rows){
+  const vs = rows.map(valueOf).filter(v => v.has);
   const sum = k => vs.reduce((a,v) => a + (v[k]||0), 0);
   return {n: vs.length, costSave: sum("costSave"), hrsYear: sum("hrsYear"), timeVal: sum("timeVal"), total: sum("total")};
 }
-function valueTiles(list){
-  const v = valueTotals(list), r = num(SETTINGS.valueRate);
+function valueTiles(rows){
+  const v = valueTotals(rows), r = num(SETTINGS.valueRate);
   const tile = (label, value, sub) => el("div",{class:"kpi"}, el("div",{class:"eyebrow",text:label}), el("b",{text:value}), el("span",{class:"sub",text:sub}));
   return el("div",{class:"kpis vtiles"},
     tile("Cost savings", rm(v.costSave), "vendor quotes minus build cost"),
     tile("Time saved", hrs(v.hrsYear), `per year · ${hrs(v.hrsYear/12)} a month`),
     tile("Value of time saved", rm(v.timeVal), r == null ? "set a default hourly rate" : `per year · default RM ${r}/h`),
-    tile("Total value", rm(v.total), `first year · ${v.n} task${v.n===1?"":"s"} with savings`));
+    tile("Total value", rm(v.total), `first year · ${v.n} module${v.n===1?"":"s"} with savings`));
 }
-function topValue(list){
-  const rows = list.map(t => [t, valueOf(t)]).filter(([,v]) => v.has && v.total > 0).sort((a,b) => b[1].total - a[1].total).slice(0,5);
-  if (!rows.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add vendor quotes and hours saved on the Value analysis page."});
-  const mx = rows[0][1].total;
-  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top tasks by first-year value"}),
-    ...rows.map(([t,v]) => el("div",{class:"tv-row", tabindex:"0", onclick:()=>openSheet(t.id), "data-tip":`${t.name}: ${rm(v.costSave)} cost + ${rm(v.timeVal)} time`},
-      el("div",{class:"tv-nm"}, el("span",{class:"code", text:serial(t)+" "}), t.name),
+function topValue(rows){
+  const top = rows.map(r => [r, valueOf(r)]).filter(([,v]) => v.has && v.total > 0).sort((a,b) => b[1].total - a[1].total).slice(0,5);
+  if (!top.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add vendor quotes and hours saved for each module on the Value analysis page."});
+  const mx = top[0][1].total;
+  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top modules by first-year value"}),
+    ...top.map(([r,v]) => el("div",{class:"tv-row", tabindex:"0", onclick:()=>setView("value"), "data-tip":`${r.p.key} · ${r.name}: ${rm(v.costSave)} cost + ${rm(v.timeVal)} time`},
+      el("div",{class:"tv-nm"}, el("span",{class:"code", text:r.no+" "}), r.name, el("span",{class:"code", text:"  · "+r.p.key})),
       el("div",{class:"tv-bar"}, el("i",{style:`width:${100*v.total/mx}%`})),
       el("b",{class:"num", text:rm(v.total)}))));
 }
 
 let valueOnly = store.get("pm.valueOnly") === "1";
-async function saveValue(t, k, raw){
-  const v = {...(t.value||{})};
-  if (raw === "") delete v[k]; else v[k] = Number(raw);
-  try { await dbRef.doc("tasks/"+t.id).update({value:v, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); }
+// Module values live in the settings document, so a save writes the latest settings with that one figure changed.
+async function saveModuleValue(pid, name, k, raw){
+  const s = normSettings(SETTINGS);
+  const m = (s.projects.find(p => p.id === pid) || {modules:[]}).modules.find(x => x.name === name);
+  if (!m){ toast("That module no longer exists"); return; }
+  if (raw === "") delete m.value[k]; else m.value[k] = Number(raw);
+  try { await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"}); }
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
 async function saveRate(raw){
@@ -423,45 +441,49 @@ async function saveRate(raw){
   catch(e){ toast("Could not save: " + (e.message||e.code)); }
 }
 
+const MCLS = {"Upcoming":"st-ns","In Progress":"st-ip","Complete":"st-ok"};
 function renderValue(){
   const ed = canManage && canWrite;
-  const all = filtered({ignoreStatus:true});
-  const list = all.filter(t => !valueOnly || valueOf(t).has).sort((a,b)=>(b.order||0)-(a.order||0));
+  const q = $("#fSearch").value.trim().toLowerCase();
+  const all = moduleRows();
+  const list = all.filter(r => (!valueOnly || valueOf(r).has) && (!q || (r.name + " " + r.p.key).toLowerCase().includes(q)));
   // Save after focus has moved on, so Tab lands in the next box once the table redraws.
-  const cell = (t, k, ph) => ed
-    ? (() => { const i = el("input",{type:"number", min:"0", step:"any", class:"si vin", id:`val-${t.id}-${k}`, placeholder:ph||"", "aria-label":`${t.name} ${k}`});
-        i.value = (t.value||{})[k] ?? ""; i.addEventListener("change", () => setTimeout(() => saveValue(t, k, i.value), 0)); return i; })()
-    : el("span",{class:"num", text: num((t.value||{})[k]) ?? ""});
-  const r = num(SETTINGS.valueRate);
-  const rows = list.map(t => { const v = valueOf(t);
+  const cell = (r, k, ph) => ed
+    ? (() => { const i = el("input",{type:"number", min:"0", step:"any", class:"si vin", id:`val-${r.p.id}-${r.i}-${k}`, placeholder:ph||"", "aria-label":`${r.name} ${k}`});
+        i.value = (r.value||{})[k] ?? ""; i.addEventListener("change", () => setTimeout(() => saveModuleValue(r.p.id, r.name, k, i.value), 0)); return i; })()
+    : el("span",{class:"num", text: num((r.value||{})[k]) ?? ""});
+  const rate = num(SETTINGS.valueRate);
+  const rows = list.map(r => { const v = valueOf(r);
     return el("tr",{},
-      el("td",{class:"code", text:serial(t)}),
-      el("td",{}, el("a",{href:"#", class:"nm", onclick:e=>{e.preventDefault(); openSheet(t.id);}, text:t.name})),
-      el("td",{text:t.project}), el("td",{}, statusPill(t)),
-      el("td",{}, cell(t,"quote")), el("td",{}, cell(t,"cost")), el("td",{class:"calc", text: v.costSave==null?"":rm(v.costSave)}),
-      el("td",{}, cell(t,"before")), el("td",{}, cell(t,"after")), el("td",{class:"calc", text: v.hrsYear==null?"":hrs(v.hrsYear)}),
-      el("td",{}, cell(t,"rate", r==null?"":String(r))), el("td",{class:"calc", text: v.timeVal==null?"":rm(v.timeVal)}),
+      el("td",{class:"code", text:r.no}),
+      el("td",{}, el("div",{class:"nm", text:r.name})),
+      el("td",{text:r.p.key}), el("td",{}, el("span",{class:"pill "+MCLS[r.m.status], text:r.m.status})),
+      el("td",{}, cell(r,"quote")), el("td",{}, cell(r,"cost")), el("td",{class:"calc", text: v.costSave==null?"":rm(v.costSave)}),
+      el("td",{}, cell(r,"before")), el("td",{}, cell(r,"after")), el("td",{class:"calc", text: v.hrsYear==null?"":hrs(v.hrsYear)}),
+      el("td",{}, cell(r,"rate", rate==null?"":String(rate))), el("td",{class:"calc", text: v.timeVal==null?"":rm(v.timeVal)}),
       el("td",{class:"calc total", text: v.has ? rm(v.total) : ""}));
   });
   const T = valueTotals(list);
-  const rateIn = ed ? el("input",{type:"number", min:"0", step:"any", class:"si w-num", id:"val-rate", value: r ?? "", placeholder:"e.g. 25", "aria-label":"Default hourly rate"}) : el("b",{text: r==null ? "not set" : `RM ${r}`});
+  const rateIn = ed ? el("input",{type:"number", min:"0", step:"any", class:"si w-num", id:"val-rate", value: rate ?? "", placeholder:"e.g. 25", "aria-label":"Default hourly rate"}) : el("b",{text: rate==null ? "not set" : `RM ${rate}`});
   if (ed) rateIn.addEventListener("change", () => saveRate(rateIn.value));
-  const only = el("label",{class:"chk"}, el("input",{type:"checkbox", checked: valueOnly||null, onchange:e=>{ valueOnly = e.target.checked; store.set("pm.valueOnly", valueOnly?"1":"0"); render(); }}), " Only tasks with savings entered");
+  const only = el("label",{class:"chk"}, el("input",{type:"checkbox", checked: valueOnly||null, onchange:e=>{ valueOnly = e.target.checked; store.set("pm.valueOnly", valueOnly?"1":"0"); render(); }}), " Only modules with savings entered");
+  const toSettings = el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("settings")}, "Edit modules in Settings");
 
   $("#v-value").replaceChildren(
     el("div",{class:"panel", style:"margin-top:14px"},
       el("div",{class:"phead"}, el("h2",{text:"Value analysis"}),
         el("div",{class:"rate"}, el("span",{class:"note", text:"Default hourly rate (RM)"}), rateIn)),
       valueTiles(all),
-      el("p",{class:"note", style:"margin:0", text:"Cost saving = vendor quote − build cost. Time saved = (manual hours a month before − after) × 12. Value of time = time saved × hourly rate (the task's own rate, or the default). Total = cost saving + one year of time value."})),
-    el("div",{class:"vbar"}, el("div",{class:"tcount", text:`${list.length} task${list.length===1?"":"s"}`}), only),
-    el("div",{class:"tablewrap"}, el("table",{class:"tasks vtable"},
+      el("p",{class:"note", style:"margin:0", text:"One row per module from Settings → Project details. Cost saving = vendor quote − build cost. Time saved = (manual hours a month before − after) × 12. Value of time = time saved × hourly rate (the module's own rate, or the default). Total = cost saving + one year of time value."})),
+    el("div",{class:"vbar"}, el("div",{class:"tcount", text:`${list.length} module${list.length===1?"":"s"}`}), el("span",{class:"spacer"}), only, toSettings),
+    all.length ? el("div",{class:"tablewrap"}, el("table",{class:"tasks vtable"},
       el("thead",{},
         el("tr",{class:"grp"}, el("th",{colspan:"4"}), el("th",{colspan:"3", text:"Cost"}), el("th",{colspan:"3", text:"Time (hours)"}), el("th",{colspan:"2", text:"Value of time"}), el("th")),
-        el("tr",{}, ...["No.","Task","Project","Status","Vendor quote (RM)","Build cost (RM)","Cost saving","Manual h/month before","After","Saved / year","Rate (RM/h)","Per year","Total value"].map(h => el("th",{scope:"col", text:h})))),
+        el("tr",{}, ...["No.","Module","Project","Status","Vendor quote (RM)","Build cost (RM)","Cost saving","Manual h/month before","After","Saved / year","Rate (RM/h)","Per year","Total value"].map(h => el("th",{scope:"col", text:h})))),
       el("tbody",{}, ...rows),
       el("tfoot",{}, el("tr",{}, el("td",{colspan:"6", text:"Total"}), el("td",{class:"calc", text:rm(T.costSave)}), el("td",{colspan:"2"}),
-        el("td",{class:"calc", text:hrs(T.hrsYear)}), el("td"), el("td",{class:"calc", text:rm(T.timeVal)}), el("td",{class:"calc total", text:rm(T.total)}))))));
+        el("td",{class:"calc", text:hrs(T.hrsYear)}), el("td"), el("td",{class:"calc", text:rm(T.timeVal)}), el("td",{class:"calc total", text:rm(T.total)})))))
+    : el("div",{class:"empty"}, el("b",{text:"No modules yet"}), "Add modules for each project under Settings → Project details, and they'll appear here."));
 }
 
 function card(t, showStatus){
@@ -755,6 +777,9 @@ function renderSettings(){
 async function saveSettings(){
   const s = normSettings(sDraft);
   s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim()})).filter(m=>m.name)})).filter(p => p.name);
+  // Module savings are edited on the Value analysis page, so keep the latest saved figures (matched by project + module name).
+  s.projects.forEach(p => { const live = SETTINGS.projects.find(x => x.id === p.id);
+    p.modules.forEach(m => { const lm = live && live.modules.find(x => x.name === m.name); if (lm) m.value = {...lm.value}; }); });
   s.team = s.team.map(m => ({...m, name:m.name.trim()})).filter(m => m.name);
   s.priorities = s.priorities.map(x=>x.trim()).filter(Boolean);
   s.types = s.types.map(x=>x.trim()).filter(Boolean);
