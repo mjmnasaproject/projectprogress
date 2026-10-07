@@ -12,6 +12,7 @@ img{max-width:100%}
   --s-ok:#2F7D46; --s-ok-bg:#DCEFE1;
   --s-cx:#7E6474; --s-cx-bg:#EEE5EA;
   --s-ug:#C4231B; --s-ug-bg:#FBE1DE;
+  --v-labour:#2F6DB5; --v-subs:#BF7A1E; --v-phys:#A8467C; --v-time:#2A8C84;
   --late:#B83A26; --late-bg:#F7E0DB;
   --shadow:0 1px 2px rgba(20,40,30,.06),0 8px 24px rgba(20,40,30,.08);
   --f-display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
@@ -22,13 +23,13 @@ img{max-width:100%}
   --bg:#121815; --surface:#1A221E; --sunk:#232D28; --line:#33403A; --fg:#E4EBE6; --muted:#9AA8A0;
   --accent:#7FC197; --accent-soft:#24392C; --on-accent:#0F1A13;
   --s-ns:#9AA5A0; --s-ns-bg:#29312D; --s-ip:#7DB2EC; --s-ip-bg:#1D2E42;
-  --s-oh:#E0B256; --s-oh-bg:#3A2F18; --s-ok:#77CB8F; --s-ok-bg:#1E3626; --s-cx:#C6A6B8; --s-cx-bg:#352830; --s-ug:#FF7A6E; --s-ug-bg:#4A1D19;
+  --s-oh:#E0B256; --s-oh-bg:#3A2F18; --s-ok:#77CB8F; --s-ok-bg:#1E3626; --s-cx:#C6A6B8; --s-cx-bg:#352830; --s-ug:#FF7A6E; --s-ug-bg:#4A1D19; --v-labour:#5F92D6; --v-subs:#B98236; --v-phys:#C26C99; --v-time:#4FA9A0;
   --late:#F08A76; --late-bg:#40221C; --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35); color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#121815; --surface:#1A221E; --sunk:#232D28; --line:#33403A; --fg:#E4EBE6; --muted:#9AA8A0;
   --accent:#7FC197; --accent-soft:#24392C; --on-accent:#0F1A13;
   --s-ns:#9AA5A0; --s-ns-bg:#29312D; --s-ip:#7DB2EC; --s-ip-bg:#1D2E42;
-  --s-oh:#E0B256; --s-oh-bg:#3A2F18; --s-ok:#77CB8F; --s-ok-bg:#1E3626; --s-cx:#C6A6B8; --s-cx-bg:#352830; --s-ug:#FF7A6E; --s-ug-bg:#4A1D19;
+  --s-oh:#E0B256; --s-oh-bg:#3A2F18; --s-ok:#77CB8F; --s-ok-bg:#1E3626; --s-cx:#C6A6B8; --s-cx-bg:#352830; --s-ug:#FF7A6E; --s-ug-bg:#4A1D19; --v-labour:#5F92D6; --v-subs:#B98236; --v-phys:#C26C99; --v-time:#4FA9A0;
   --late:#F08A76; --late-bg:#40221C; --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.35); color-scheme:dark}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body)}
@@ -397,3 +398,21 @@ table.vtable td.neg{color:var(--late)}
 .netproj tfoot td{font-weight:600;border-top:2px solid var(--line);background:var(--sunk)}
 .netproj th:nth-child(2),.netproj td:nth-child(2){min-width:0;text-align:right}
 .netproj th:nth-child(2){text-align:center}
+
+/* Overview: value charts by project */
+.vcharts{margin-bottom:20px}
+.vcharts > .panel{display:flex;flex-direction:column}
+.hbars{display:flex;flex-direction:column;gap:10px}
+.hb-row{display:grid;grid-template-columns:84px 1fr 96px;gap:10px;align-items:center}
+.hb-nm{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hb-track{height:20px;position:relative}
+.hb-stack{display:flex;gap:2px;height:100%;min-width:0}
+.hb-stack i{display:block;height:100%;min-width:3px;border-radius:2px}
+.hb-stack i:first-child{border-radius:4px 2px 2px 4px} .hb-stack i:last-child{border-radius:2px 4px 4px 2px} .hb-stack i:only-child{border-radius:4px}
+.hb-stack i:hover,.hb-div i:hover{filter:brightness(1.08)}
+.hb-v{font:12px var(--f-mono);text-align:right;white-space:nowrap}
+.hb-div{position:relative;height:100%}
+.hb-zero{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--muted)}
+.hb-div i{position:absolute;top:0;height:100%;border-radius:4px}
+.hb-div i.pos{background:var(--accent)} .hb-div i.neg{background:var(--late)}
+.vcharts .legend{margin-top:10px}

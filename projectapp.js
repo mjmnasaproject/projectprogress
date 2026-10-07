@@ -280,7 +280,7 @@ function renderOverview(){
   });
   const pplPanel = el("div",{class:"panel"}, el("h2",{text:"Team workload"}), ppl);
 
-  $("#v-overview").replaceChildren(kpis, valuePanel, milestones, charts,
+  $("#v-overview").replaceChildren(kpis, valueCharts(), valuePanel, milestones, charts,
     el("div",{class:"grid2"}, el("div",{class:"stack"}, monthPanel, pplPanel), el("div",{class:"stack"}, attnPanel)));
 }
 
@@ -486,16 +486,57 @@ async function saveRate(which, raw){
 }
 
 const MCLS = {"Upcoming":"st-ns","In Progress":"st-ip","Complete":"st-ok"};
+// ---------- value charts (overview) ----------
+// Horizontal bars per project, monthly. Savings parts use their own categorical colours (not status colours),
+// and every chart has value labels, a legend where there's more than one series, and hover details.
+const VPARTS = [["labour","Direct labour","--v-labour"],["subs","Cancelled subscriptions","--v-subs"],["physical","Physical cost","--v-phys"]];
+function valueCharts(){
+  const fp = $("#fProject").value;
+  const rows = PROJECTS.filter(p => !fp || p.key === fp).map(projectValue);
+  const panel = (title, body) => el("div",{class:"panel"}, el("h2",{text:title}), body);
+  const none = el("p",{class:"note", style:"margin:0", text:"No savings entered yet. Add them on the Value analysis page."});
+  const anySav = rows.some(r => r.sav), anyHrs = rows.some(r => r.hrs), anyNet = rows.some(r => r.net);
+  const row = (r, track, val) => el("div",{class:"hb-row"}, el("div",{class:"hb-nm", text:r.p.key}), el("div",{class:"hb-track"}, track), el("div",{class:"hb-v num", text:val}));
+
+  // 1. cost savings, split by part
+  const maxSav = Math.max(1, ...rows.map(r => r.sav));
+  const cost = anySav ? el("div",{class:"hbars"},
+    ...rows.map(r => row(r, el("div",{class:"hb-stack", style:`width:${100*r.sav/maxSav}%`},
+        ...VPARTS.map(([k,label,v]) => r[k] > 0 ? el("i",{style:`flex:${r[k]};background:var(${v})`, "data-tip":`${r.p.key} · ${label}: ${rm(r[k])} a month`}) : null)),
+      rm(r.sav))),
+    el("div",{class:"legend"}, ...VPARTS.map(([,label,v]) => el("span",{}, el("i",{style:`background:var(${v})`}), label)))) : none;
+
+  // 2. time saved
+  const maxH = Math.max(1, ...rows.map(r => r.hrs));
+  const time = anyHrs ? el("div",{class:"hbars"},
+    ...rows.map(r => row(r, el("div",{class:"hb-stack", style:`width:${100*r.hrs/maxH}%`},
+        r.hrs > 0 ? el("i",{style:"flex:1;background:var(--v-time)", "data-tip":`${r.p.key}: ${hrs(r.hrs)} a month · ${hrs(r.hrs*12)} a year`}) : null), hrs(r.hrs))),
+    el("p",{class:"note", style:"margin:8px 0 0", text:"Manual hours saved a month"})) : el("p",{class:"note", style:"margin:0", text:"No hours saved entered yet."});
+
+  // 3. net savings (can be negative): bars grow left/right from a zero line
+  const pos = Math.max(0, ...rows.map(r => r.net)), neg = Math.max(0, ...rows.map(r => -r.net)), span = Math.max(1, pos + neg), zero = 100*neg/span;
+  const net = (anySav || rows.some(r => r.own || r.share)) ? el("div",{class:"hbars"},
+    ...rows.map(r => row(r, el("div",{class:"hb-div"}, el("span",{class:"hb-zero", style:`left:${zero}%`}),
+        r.net ? el("i",{class: r.net < 0 ? "neg" : "pos", style: r.net < 0 ? `left:${zero - 100*(-r.net)/span}%;width:${100*(-r.net)/span}%` : `left:${zero}%;width:${100*r.net/span}%`,
+          "data-tip":`${r.p.key}: savings ${rm(r.sav)} − own expenses ${rm(r.own)} − shared ${rm(r.share)} = ${rm(r.net)} a month`}) : null), rm(r.net))),
+    el("div",{class:"legend"}, el("span",{}, el("i",{style:"background:var(--accent)"}), "Net saving"), el("span",{}, el("i",{style:"background:var(--late)"}), "Net cost (expenses exceed savings)"))) : none;
+
+  return el("div",{class:"charts vcharts"}, panel("Cost savings by project", cost), panel("Time saved by project", time), panel("Net savings by project", net));
+}
+
 // Net savings per project: own module savings − own expenses − its share of shared expenses.
+// One project's monthly figures: savings by part, hours saved, own expenses, share of shared expenses, net.
+function projectValue(p){
+  const N = Math.max(1, PROJECTS.length);
+  const t = valueTotals(p.modules.map((m,i) => ({p, m, i, value:m.value})));
+  const own = p.expenses.filter(e => !e.shared).reduce((a,e) => a + (num(e.amount)||0), 0);
+  const share = sharedExpenses().reduce((a,{e}) => a + (num(e.amount)||0), 0) / N;
+  return {p, labour:t.labour, subs:t.subs, physical:t.physical, sav:t.total, hrs:t.hrsMonth, own, share, net: t.total - own - share};
+}
 function netByProject(){
   const fp = $("#fProject").value, N = Math.max(1, PROJECTS.length);
   const sharedTotal = sharedExpenses().reduce((a,{e}) => a + (num(e.amount)||0), 0);
-  const rows = PROJECTS.filter(p => !fp || p.key === fp).map(p => {
-    const sav = valueTotals(p.modules.map((m,i) => ({p, m, i, value:m.value}))).total;
-    const own = p.expenses.filter(e => !e.shared).reduce((a,e) => a + (num(e.amount)||0), 0);
-    const share = sharedTotal / N;
-    return {p, sav, own, share, net: sav - own - share};
-  });
+  const rows = PROJECTS.filter(p => !fp || p.key === fp).map(projectValue);
   const sum = k => rows.reduce((a,r) => a + r[k], 0);
   const c = (n, cls) => el("td",{class:"calc"+(cls?" "+cls:"")+(cls==="netc" && n<0?" neg":""), text:rm(n)});
   return el("div",{class:"panel netproj"},
