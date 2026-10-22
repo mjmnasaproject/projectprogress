@@ -7,11 +7,17 @@ let SETTINGS, PROJECTS = [], TEAM = [], TYPES = [], PRIS = [];
 // Project modules are milestones: {name, status} with status Upcoming / In Progress / Complete.
 const MSTAT = ["Upcoming","In Progress","Complete"];
 const MVAR = {"Upcoming":"--s-ns","In Progress":"--s-ip","Complete":"--s-ok"};
+// User access (Settings → User access). Until someone is made Admin, everyone has full access.
+const ROLES = ["Admin","Approver","Member","Viewer"];
+const ROLE_INFO = {Admin:"Everything, including Settings and user access", Approver:"Approves task requests and edits all tasks",
+  Member:"Requests tasks and updates tasks assigned to them", Viewer:"Can only view"};
+// Hierarchy: master project (Nursery, Machinery…) → project (stored as a "module") → sub-projects. Each has a status.
+const normSub = x => typeof x === "string" ? {name:x, status:"Upcoming"} : {name:(x&&x.name)||"", status: MSTAT.includes(x&&x.status) ? x.status : "Upcoming"};
 function normModule(m){
-  if (typeof m === "string") return {name:m, status:"Upcoming", value:{}};
+  if (typeof m === "string") return {name:m, status:"Upcoming", value:{}, subs:[]};
   m = m || {};
   return {name:m.name||"", status: MSTAT.includes(m.status) ? m.status : "Upcoming",
-    value: m.value && typeof m.value === "object" ? {...m.value} : {}};
+    value: m.value && typeof m.value === "object" ? {...m.value} : {}, subs:(m.subs||[]).map(normSub)};
 }
 function normSettings(s){
   s = s || {};
@@ -24,7 +30,7 @@ function normSettings(s){
     valueRate: s.valueRate === "" || s.valueRate == null ? "" : Number(s.valueRate),
     valueRates: {print: s.valueRates && s.valueRates.print != null && s.valueRates.print !== "" ? Number(s.valueRates.print) : "",
                  ba: s.valueRates && s.valueRates.ba != null && s.valueRates.ba !== "" ? Number(s.valueRates.ba) : ""},
-    team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||""}))
+    team: (s.team||[]).map((m,i) => ({id:m.id||"m"+i, name:m.name||"", role: ROLES.includes(m.role) ? m.role : "Member"}))
   };
 }
 function applySettings(s){
@@ -68,13 +74,17 @@ $("#asof").textContent = "Today " + fmtY(TODAY);
 // ---------- state ----------
 let tasks = [];
 let loaded = false, dbRef = null, canManage = false, canWrite = true;
+// hostManage: the storage allows full editing; the user's role then narrows it down (applyAccess).
+let hostManage = false, canAdmin = false, canApprove = false, canRequest = false;
+let requests = [], requestsErr = "";
 let view = "overview";
 const TASK_VIEWS = ["overview","board","timeline","list"];
-const VIEWS = [...TASK_VIEWS, "value", "settings"];
+const VIEWS = [...TASK_VIEWS, "requests", "value", "settings"];
 if (VIEWS.includes(location.hash.slice(1))) view = location.hash.slice(1);
 else { const v = store.get("pm.view"); if (VIEWS.includes(v)) view = v; }
-const me = ""; // no "I am" picker: whoever can edit the tracker updates any task
-const editor = "";    // no sign-in: changes are recorded as "Manager"
+// Who is using the tracker: picked under "Signed in as" in the header, stored in this browser.
+// A host system with its own login can set window.TRACKER_USER = "<name in Settings → Team>" before this script loads.
+let me = "", editor = "";
 // Sort for the Tasks table. Task numbers run in the order tasks were added, so "latest" = highest number.
 const SORTS = {latest:["order",-1], oldest:["order",1], priority:["priority",1], due:["due",1], status:["status",1]};
 let [sortKey, sortDir] = SORTS[store.get("pm.sort")] || SORTS.latest;
@@ -91,6 +101,7 @@ function serial(t){
   const same = tasks.filter(x => x.project === t.project).sort((a,b)=>(a.order||0)-(b.order||0));
   return `${projCode(t.project)}1.${same.indexOf(t)+1}`;
 }
+function taskPath(t){ return [t.project, t.module, t.sub].filter(Boolean).join(" › "); }
 function people(){ return TEAM; }
 function estEnd(p){
   if (!p.start || !p.duration) return "";
@@ -98,6 +109,22 @@ function estEnd(p){
 }
 function mine(t){ return me && (t.assignees||[]).includes(me); }
 function canEditStatus(t){ return canWrite && (canManage || mine(t)); }
+function roleOf(name){ return (SETTINGS.team.find(m => m.name === name)||{}).role || ""; }
+const setupMode = () => !SETTINGS.team.some(m => m.role === "Admin");
+function applyAccess(){
+  me = window.TRACKER_USER || store.get("pm.me") || "";
+  if (!window.TRACKER_USER && me && !TEAM.includes(me)) me = "";
+  editor = me;
+  const role = setupMode() ? "Admin" : roleOf(me) || "Viewer";
+  canAdmin = hostManage && role === "Admin";
+  canApprove = canManage = hostManage && (role === "Admin" || role === "Approver");
+  canRequest = canWrite && role !== "Viewer";
+  const who = $("#who");
+  if (window.TRACKER_USER){ who.replaceWith(el("b",{id:"who", text:me})); return; }
+  who.replaceChildren(el("option",{value:"", text:"Choose your name"}), ...TEAM.map(n => el("option",{value:n, text:n})));
+  who.value = me;
+}
+$("#who").addEventListener("change", e => { store.set("pm.me", e.target.value); applyAccess(); sDirty = false; render(); });
 
 // Board month/year filter: a task matches if its dates (start → done/due) touch that month or year.
 // Each task belongs to exactly one year, so the years always add up to "All years":
@@ -129,7 +156,7 @@ function filtered(opts={}){
     (!p || t.project === p) && (!who || (t.assignees||[]).includes(who)) && (!pr || t.priority === pr) &&
     (opts.ignoreStatus || !st || (st === "Overdue" ? isOverdue(t) : t.status === st)) &&
     (!open || !closed(t)) && (!period || inPeriod(t)) &&
-    (!q || [t.name,t.project,t.type,(t.assignees||[]).join(" "),t.notes].join(" ").toLowerCase().includes(q)));
+    (!q || [t.name,t.project,t.module,t.sub,t.type,(t.assignees||[]).join(" "),t.notes].join(" ").toLowerCase().includes(q)));
 }
 
 // ---------- filters setup ----------
@@ -161,7 +188,7 @@ function setView(v){
   view = v; store.set("pm.view", v);
   document.querySelectorAll("nav.tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.view === v));
   VIEWS.forEach(x => $("#v-"+x).hidden = x !== v);
-  $("#filters").hidden = v === "settings";
+  $("#filters").hidden = v === "settings" || v === "requests";
   document.body.dataset.view = v;
   $("#fSort").hidden = v !== "list";
   $("#fStatus").hidden = $("#fPri").hidden = !(v === "list" || v === "timeline");
@@ -177,6 +204,15 @@ function render(){
   $("#addBtn").hidden = !(canManage && canWrite) || view !== "list";
   const b = $("#banner"); b.replaceChildren();
   if (loaded && !canWrite) b.append(el("div",{class:"banner"}, "You can view this tracker. Ask the owner for Contributor access to update tasks."));
+  else if (loaded && !me && !setupMode() && !window.TRACKER_USER) b.append(el("div",{class:"banner"}, "Choose your name under “Signed in as” at the top to request, approve or update tasks."));
+  const pend = requests.filter(r => r.status === "Pending").length, badge = $("#reqCount");
+  badge.textContent = pend; badge.hidden = !pend;
+  if (view === "requests"){
+    // Don't redraw under someone typing an approve/reject note.
+    const a = document.activeElement;
+    if (!(reqOpen && a && a.closest && a.closest("#v-requests .decide"))) renderRequests();
+    return;
+  }
   if (view === "settings"){
     // Don't rebuild the form under someone mid-edit; internal changes call renderSettings() directly.
     if (!sDirty || !$("#v-settings").childElementCount) renderSettings();
@@ -206,26 +242,7 @@ function statusPill(t){
 function renderOverview(){
   const list = filtered({ignoreStatus:true});
   const done = list.filter(t=>t.status==="Complete");
-  const ip = list.filter(t=>t.status==="In Progress");
   const od = list.filter(isOverdue);
-  const ns = list.filter(t=>t.status==="Not Started");
-  const active = list.filter(t=>t.status!=="Cancelled");
-  const onTime = done.filter(t=>t.due && t.end);
-  const onTimePct = onTime.length ? Math.round(100*onTime.filter(t=>t.end<=t.due).length/onTime.length) : null;
-  const durs = done.filter(t=>t.start&&t.end).map(t=>diffDays(t.end,t.start)+1);
-  const avg = durs.length ? (durs.reduce((a,b)=>a+b,0)/durs.length).toFixed(1) : "—";
-  const pct = active.length ? Math.round(100*done.length/active.length) : 0;
-
-  const kpi = (label, value, sub, cls, onclick) => el("div",{class:"kpi "+(cls||""), style: onclick?"cursor:pointer":"", onclick},
-    el("div",{class:"eyebrow",text:label}), el("b",{text:value}), el("span",{class:"sub",text:sub}));
-  const jump = st => () => { $("#fStatus").value = st; setView("list"); };
-
-  const kpis = el("div",{class:"kpis"},
-    kpi("Completed", `${pct}%`, `${done.length} of ${active.length} tasks`, "", jump("Complete")),
-    kpi("In progress", ip.length, "being built now", "", jump("In Progress")),
-    kpi("Overdue", od.length, "past due, not complete", od.length?"alert":"", jump("Overdue")),
-    kpi("Not started", ns.length, "in the backlog", "", jump("Not Started")),
-    kpi("Finished on time", onTimePct==null?"—":onTimePct+"%", `avg ${avg} days per task`));
 
   // value delivered (from the Value analysis page)
   const valuePanel = el("div",{class:"panel"},
@@ -280,7 +297,7 @@ function renderOverview(){
   });
   const pplPanel = el("div",{class:"panel"}, el("h2",{text:"Team workload"}), ppl);
 
-  $("#v-overview").replaceChildren(kpis, valueCharts(), valuePanel, milestones, charts,
+  $("#v-overview").replaceChildren(valueCharts(), valuePanel, milestones, charts,
     el("div",{class:"grid2"}, el("div",{class:"stack"}, monthPanel, pplPanel), el("div",{class:"stack"}, attnPanel)));
 }
 
@@ -360,7 +377,7 @@ function milestoneChart(){
   const head = el("div",{class:"phead"}, el("h2",{text:"Milestone progress"}),
     el("div",{class:"legend", style:"margin:0"}, ...MSTAT.map(s => el("span",{}, el("i",{style:`background:var(${MVAR[s]})`}), s))));
   if (!projs.length) return el("div",{class:"panel"}, head,
-    el("p",{class:"note", style:"margin:0"}, "No modules yet. Add them under Settings → Project details, then set each one to Upcoming, In Progress or Complete. ",
+    el("p",{class:"note", style:"margin:0"}, "No projects yet. Add them under Settings → Projects & sub-projects, then set each one to Upcoming, In Progress or Complete. ",
       el("button",{class:"btn addrow", style:"margin:0 0 0 6px", onclick:()=>setView("settings")}, "Open Settings")));
   return el("div",{class:"panel milestones"}, head, ...projs.map(p => {
     const c = s => p.modules.filter(m => m.status === s).length, n = p.modules.length, done = c("Complete");
@@ -369,10 +386,13 @@ function milestoneChart(){
         el("b",{text:p.key}),
         el("span",{class:"note num", text:`${done} of ${n} complete · ${c("In Progress")} in progress · ${c("Upcoming")} upcoming`}),
         el("div",{class:"ms-pct"}, el("div",{class:"bar"}, el("i",{style:`width:${pctOf(done,n)}%;background:var(--s-ok)`})), el("b",{class:"num", text:pctOf(done,n)+"%"}))),
-      el("ol",{class:"msteps"}, ...p.modules.map((m,i) => el("li",{class:"mstep", style:`--sc:var(${MVAR[m.status]})`, "data-s":m.status, "data-tip":`${i+1}. ${m.name} — ${m.status}`},
+      el("ol",{class:"msteps"}, ...p.modules.map((m,i) => el("li",{class:"mstep", style:`--sc:var(${MVAR[m.status]})`, "data-s":m.status, "data-tip":`${i+1}. ${m.name} — ${m.status}` + (m.subs.length ? ` · sub-projects: ` + m.subs.map(x => `${x.name} (${x.status})`).join(", ") : "")},
         el("div",{class:"ms-track"}, el("span",{class:"ms-dot", "aria-hidden":"true", text: m.status==="Complete" ? "✓" : String(i+1)})),
         el("div",{class:"ms-nm", text:m.name}),
-        el("small",{text:m.status})))));
+        el("small",{text:m.status}),
+        m.subs.length ? el("div",{class:"ms-subs"},
+          ...m.subs.map(x => el("i",{style:`background:var(${MVAR[x.status]})`, "data-tip":`${m.name} → ${x.name}: ${x.status}`})),
+          el("span",{text:`${m.subs.filter(x=>x.status==="Complete").length}/${m.subs.length} sub-projects`})) : null))));
   }));
 }
 
@@ -450,9 +470,9 @@ function valueTiles(rows){
 }
 function topValue(rows){
   const top = rows.map(r => [r, valueOf(r)]).filter(([,v]) => v.has && v.total > 0).sort((a,b) => b[1].total - a[1].total).slice(0,5);
-  if (!top.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add them for each module on the Value analysis page."});
+  if (!top.length) return el("p",{class:"note", style:"margin:4px 0 0", text:"No savings entered yet. Add them for each project on the Value analysis page."});
   const mx = top[0][1].total;
-  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top modules by monthly cost savings"}),
+  return el("div",{class:"topval"}, el("div",{class:"eyebrow", style:"margin-bottom:8px", text:"Top projects by monthly cost savings"}),
     ...top.map(([r,v]) => el("div",{class:"tv-row", tabindex:"0", onclick:()=>setView("value"),
         "data-tip":`${r.p.key} · ${r.name}: labour ${rm(v.labour)} + subscriptions ${rm(v.subs||0)} + physical ${rm(v.physical||0)} a month`},
       el("div",{class:"tv-nm"}, el("span",{class:"code", text:r.no+" "}), r.name, el("span",{class:"code", text:"  · "+r.p.key})),
@@ -610,8 +630,8 @@ function renderValue(){
     ? (() => { const i = el("input",{type:"number", min:"0", step:"any", class:"si w-num", id:`val-rate-${which}`, "aria-label":label}); i.value = val;
         i.addEventListener("change", () => saveRate(which, i.value)); return i; })()
     : el("b",{text:rmRate(val)});
-  const only = el("label",{class:"chk"}, el("input",{type:"checkbox", checked: valueOnly||null, onchange:e=>{ valueOnly = e.target.checked; store.set("pm.valueOnly", valueOnly?"1":"0"); render(); }}), " Only modules with savings entered");
-  const toSettings = el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("settings")}, "Edit modules in Settings");
+  const only = el("label",{class:"chk"}, el("input",{type:"checkbox", checked: valueOnly||null, onchange:e=>{ valueOnly = e.target.checked; store.set("pm.valueOnly", valueOnly?"1":"0"); render(); }}), " Only projects with savings entered");
+  const toSettings = el("button",{class:"btn addrow", style:"margin:0", onclick:()=>setView("settings")}, "Edit projects in Settings");
   const th = (text, a={}) => el("th",{scope:"col", ...a, text});
 
   $("#v-value").replaceChildren(
@@ -622,13 +642,13 @@ function renderValue(){
           el("label",{class:"rate"}, el("span",{class:"note", text:"Printing RM / page"}), rateIn("print", R.print, "Printing cost per page")),
           showBA ? el("label",{class:"rate"}, el("span",{class:"note", text:"BA form RM / page"}), rateIn("ba", R.ba, "BA form rewriting cost per page")) : null)),
       valueTiles(all),
-      el("p",{class:"note", style:"margin:0", text:`One row per module from Settings → Project details. All figures are per month. Direct labour time cost = hours saved × staff (1 if blank) × ${rmRate(R.labour)} per staff per hour. Printing = pages a month × ${rmRate(R.print)}. BA form rewriting (projects ticked "BA form" in Settings) = pages a month × ${rmRate(R.ba)}. Total cost savings = labour + cancelled subscriptions + printing + BA forms. Net savings = total cost savings − expenses.`})),
+      el("p",{class:"note", style:"margin:0", text:`One row per project from Settings → Projects & sub-projects. All figures are per month. Direct labour time cost = hours saved × staff (1 if blank) × ${rmRate(R.labour)} per staff per hour. Printing = pages a month × ${rmRate(R.print)}. BA form rewriting (projects ticked "BA form" in Settings) = pages a month × ${rmRate(R.ba)}. Total cost savings = labour + cancelled subscriptions + printing + BA forms. Net savings = total cost savings − expenses.`})),
     expensesPanel(ed),
     netByProject(),
-    el("div",{class:"vbar"}, el("div",{class:"tcount", text:`${list.length} module${list.length===1?"":"s"}`}), el("span",{class:"spacer"}), only, toSettings),
+    el("div",{class:"vbar"}, el("div",{class:"tcount", text:`${list.length} project${list.length===1?"":"s"}`}), el("span",{class:"spacer"}), only, toSettings),
     all.length ? el("div",{class:"tablewrap"}, el("table",{class:"tasks vtable"},
       el("thead",{},
-        el("tr",{class:"grp"}, th("No.",{rowspan:"3"}), th("Module",{rowspan:"3"}), th("Project",{rowspan:"3"}), th("Status",{rowspan:"3"}),
+        el("tr",{class:"grp"}, th("No.",{rowspan:"3"}), th("Project",{rowspan:"3"}), th("Master project",{rowspan:"3"}), th("Status",{rowspan:"3"}),
           th("Time Savings",{colspan:"3", class:"g"}),
           th("Cost Savings",{colspan:"3", class:"g"}), th("Total Physical Cost Savings",{colspan: showBA ? "4" : "2", class:"g"}), th("Total Cost Savings (Monthly)",{rowspan:"3", class:"g"})),
         el("tr",{class:"grp"}, th("Manual hours a month",{colspan:"3", class:"g"}),
@@ -643,7 +663,7 @@ function renderValue(){
         ...(showBA ? [el("td"), calc(T.baSave)] : []), calc(T.total, "total gl")),
         el("tr",{class:"exp"}, el("td",{colspan: String(span), text:"Less: expenses (monthly)"}), el("td",{class:"calc gl", text: EX ? "− " + rm(EX) : rm(0)})),
         el("tr",{class:"netrow"}, el("td",{colspan: String(span), text:"Net savings (monthly)"}), el("td",{class:"calc total gl"+(T.total-EX<0?" neg":""), text:rm(T.total - EX)})))))
-    : el("div",{class:"empty"}, el("b",{text:"No modules yet"}), "Add modules for each project under Settings → Project details, and they'll appear here."));
+    : el("div",{class:"empty"}, el("b",{text:"No projects yet"}), "Add projects under each master project in Settings → Projects & sub-projects, and they'll appear here."));
 }
 
 function card(t, showStatus){
@@ -708,7 +728,7 @@ function renderList(){
       el("td",{}, el("div",{class:"nm",text:t.name}), t.link?el("a",{href:t.link.split(/\s/).find(x=>x.startsWith("http"))||t.link, target:"_blank", rel:"noopener", onclick:e=>e.stopPropagation(), class:"code", text:"open app ↗"}):null),
       el("td",{}, el("span",{class:"pri "+t.priority,text:t.priority})),
       el("td",{}, statusPill(t)),
-      el("td",{text:t.project}), el("td",{text:t.type||""}),
+      el("td",{}, el("div",{text:t.project}), t.module ? el("small",{class:"path", text:[t.module,t.sub].filter(Boolean).join(" › ")}) : null), el("td",{text:t.type||""}),
       el("td",{text:(t.assignees||[]).join(", ")}),
       el("td",{class:"date",text:t.start?fmt(t.start):""}),
       el("td",{class:"date"+(isOverdue(t)?" l":""),text:t.due?fmt(t.due):""}),
@@ -839,11 +859,11 @@ const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(
 
 function renderSettings(){
   if (!sDraft || !sDirty) sDraft = normSettings(SETTINGS);
-  const d = sDraft, ro = !(canManage && canWrite);
+  const d = sDraft, ro = !(canAdmin && canWrite);
   const root = $("#v-settings");
   const bar = el("div",{class:"savebar"});
   const paintBar = () => bar.replaceChildren(
-    el("span",{class:"note", text: ro ? "Only the tracker owner can change settings." : sDirty ? "You have unsaved changes." : "All changes saved."}),
+    el("span",{class:"note", text: ro ? "Only an Admin can change settings." : sDirty ? "You have unsaved changes." : "All changes saved."}),
     el("span",{class:"spacer"}),
     ro ? null : el("button",{class:"btn", disabled: sDirty?null:true, onclick:()=>{ sDirty=false; renderSettings(); }}, "Discard"),
     ro ? null : el("button",{class:"btn primary", disabled: sDirty?null:true, onclick:saveSettings}, "Save settings"));
@@ -886,12 +906,12 @@ function renderSettings(){
       el("td",{}, rm(p.name, () => { d.projects.splice(i,1); redraw(); }, n ? `${n} task${n===1?" uses":"s use"} this project` : null)));
   });
   const projPanel = el("div",{class:"panel"},
-    el("h2",{text:"Project key dates"}),
+    el("h2",{text:"Master project key dates"}),
     el("div",{class:"swrap"}, el("table",{class:"stable wide"},
-      thead("#","Project name","Code","Start date","Duration","Est. end date","Actual end date","BA form","Tasks",""),
+      thead("#","Master project","Code","Start date","Duration","Est. end date","Actual end date","BA form","Tasks",""),
       el("tbody",{}, ...pRows))),
-    add("Add project", () => { d.projects.push({id:uid("p"), name:"", code:"", start:"", duration:180, actualEnd:"", modules:[], baForm:false}); redraw(); }),
-    el("p",{class:"note", text:"Est. end date is the start date plus the duration. BA form: tick projects that track BA form rewriting savings on the Value analysis page. Renaming a project also moves its tasks to the new name."}));
+    add("Add master project", () => { d.projects.push({id:uid("p"), name:"", code:"", start:"", duration:180, actualEnd:"", modules:[], baForm:false}); redraw(); }),
+    el("p",{class:"note", text:"Est. end date is the start date plus the duration. BA form: tick master projects that track BA form rewriting savings on the Value analysis page. Renaming a master project also moves its tasks to the new name."}));
 
   // Status / Priority / Type
   const statusPanel = el("div",{class:"panel"}, el("h2",{text:"Status"}),
@@ -911,34 +931,56 @@ function renderSettings(){
     add("Add person", () => { d.team.push({id:uid("m"), name:""}); redraw(); }),
     el("p",{class:"note", text:"Renaming someone also updates the tasks assigned to them."}));
 
-  // System / Module per project
-  const modPanels = d.projects.map(p => el("div",{class:"panel"},
-    el("div",{class:"eyebrow", text:`${p.name || "New project"} project details`}),
-    el("h2",{style:"margin-top:4px", text:"System / Module"}),
-    p.modules.length ? el("table",{class:"stable"}, el("tbody",{}, ...p.modules.map((m,i) => el("tr",{},
-      el("td",{class:"idx",text:i+1}), el("td",{}, inp(m,"name",{label:`${p.name} module ${i+1}`, ph:"System or module name"})),
-      el("td",{class:"mst"}, (() => {
-        const sel = el("select",{class:"si mstat", "data-s":m.status, "aria-label":`${m.name} status`, disabled: ro||null},
-          ...MSTAT.map(x => el("option",{value:x, text:x})));
-        sel.value = m.status;
-        sel.addEventListener("change", () => { m.status = sel.value; sel.dataset.s = sel.value; touch(); });
-        return sel; })()),
-      el("td",{class:"x"}, rm(m.name, () => { p.modules.splice(i,1); redraw(); }))))))
-      : el("p",{class:"note", text:"No systems or modules yet."}),
-    add("Add module", () => { p.modules.push({name:"", status:"Upcoming"}); redraw(); })));
+  // User access: one role per person in Team
+  const accessPanel = el("div",{class:"panel"}, el("h2",{text:"User access"}),
+    el("div",{class:"swrap"}, el("table",{class:"stable access"}, thead("#","Person","Role","What they can do"),
+      el("tbody",{}, ...d.team.map((m,i) => {
+        const info = el("td",{class:"note", text:ROLE_INFO[m.role]});
+        const sel = el("select",{class:"si", "aria-label":`${m.name} role`, disabled: ro||null}, ...ROLES.map(r => el("option",{value:r, text:r})));
+        sel.value = m.role; sel.addEventListener("change", () => { m.role = sel.value; info.textContent = ROLE_INFO[m.role]; touch(); });
+        return el("tr",{}, el("td",{class:"idx", text:i+1}), el("td",{text:m.name || "(no name)"}), el("td",{class:"w-role"}, sel), info);
+      })))),
+    el("p",{class:"note", text: d.team.some(m=>m.role==="Admin")
+      ? "People pick their name under “Signed in as” at the top. Only Approvers and Admins can approve task requests. Anyone not in Team can only view."
+      : "No Admin yet, so everyone has full access. Make at least one person Admin to switch user access on."}));
+
+  // Master project → projects → sub-projects, each with a status
+  const statusSel = (o, label) => { const sel = el("select",{class:"si mstat", "data-s":o.status, "aria-label":`${label} status`, disabled: ro||null},
+      ...MSTAT.map(x => el("option",{value:x, text:x})));
+    sel.value = o.status; sel.addEventListener("change", () => { o.status = sel.value; sel.dataset.s = sel.value; touch(); }); return sel; };
+  const modPanels = d.projects.map(p => el("div",{class:"panel mproj"},
+    el("div",{class:"eyebrow", text:"Master project"}),
+    p.name && SETTINGS.projects.some(x => x.id === p.id) ? el("h2",{style:"margin-top:4px", text:p.name})
+      : el("div",{style:"margin:4px 0 8px"}, inp(p,"name",{label:"Master project name", ph:"Master project name"})),
+    p.modules.length ? el("table",{class:"stable ptree"}, el("tbody",{}, ...p.modules.flatMap((m,i) => [
+      el("tr",{class:"prow"},
+        el("td",{class:"idx",text:i+1}), el("td",{}, inp(m,"name",{label:`${p.name} project ${i+1}`, ph:"Project name"})),
+        el("td",{class:"mst"}, statusSel(m, m.name)),
+        el("td",{class:"x"}, rm(m.name, () => { p.modules.splice(i,1); redraw(); }, m.subs.length ? `Remove its ${m.subs.length} sub-project${m.subs.length===1?"":"s"} first` : null))),
+      ...m.subs.map((x,j) => el("tr",{class:"srow"},
+        el("td",{class:"idx",text:`${i+1}.${j+1}`}), el("td",{}, el("div",{class:"sub-in"}, el("span",{class:"sub-mark", "aria-hidden":"true", text:"↳"}), inp(x,"name",{label:`${m.name} sub-project ${j+1}`, ph:"Sub-project name"}))),
+        el("td",{class:"mst"}, statusSel(x, x.name)),
+        el("td",{class:"x"}, rm(x.name, () => { m.subs.splice(j,1); redraw(); })))),
+      ro ? null : el("tr",{class:"addsub"}, el("td"), el("td",{colspan:"3"},
+        el("button",{class:"linkbtn", onclick:() => { m.subs.push({name:"", status:"Upcoming"}); redraw(); }}, "+ Add sub-project")))
+    ].filter(Boolean))))
+      : el("p",{class:"note", text:"No projects yet."}),
+    add("Add project", () => { p.modules.push({name:"", status:"Upcoming", value:{}, subs:[]}); redraw(); })));
 
   paintBar();
   root.replaceChildren(el("div",{class:"settings"},
     projPanel,
     el("div",{class:"sgrid lookups"}, statusPanel, listPanel("Priority", d.priorities, "Priority"), listPanel("Type", d.types, "Type"), teamPanel),
-    el("h2",{class:"shead", text:"Project details"}),
+    accessPanel,
+    el("h2",{class:"shead", text:"Projects & sub-projects"}),
     el("div",{class:"sgrid wide"}, ...modPanels),
+    add("Add master project", () => { d.projects.push({id:uid("p"), name:"", code:"", start:"", duration:180, actualEnd:"", modules:[], baForm:false}); redraw(); }),
     bar));
 }
 
 async function saveSettings(){
   const s = normSettings(sDraft);
-  s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim()})).filter(m=>m.name)})).filter(p => p.name);
+  s.projects = s.projects.map(p => ({...p, name:p.name.trim(), code:p.code.trim(), modules:p.modules.map(m=>({...m, name:m.name.trim(), subs:m.subs.map(x=>({...x, name:x.name.trim()})).filter(x=>x.name)})).filter(m=>m.name)})).filter(p => p.name);
   // Module savings are edited on the Value analysis page, so keep the latest saved figures (matched by project + module name).
   s.projects.forEach(p => { const live = SETTINGS.projects.find(x => x.id === p.id);
     p.modules.forEach(m => { const lm = live && live.modules.find(x => x.name === m.name); if (lm) m.value = {...lm.value}; });
@@ -951,6 +993,9 @@ async function saveSettings(){
   if (dp) return toast(`Two projects are called “${dp}”`);
   if (dm) return toast(`“${dm}” is listed twice in Team`);
   if (!s.projects.length) return toast("Add at least one project");
+  const admins = s.team.filter(m => m.role === "Admin").map(m => m.name);
+  if (admins.length && !admins.includes(me) && !confirm(me ? `You (${me}) won't be an Admin after saving, so you won't be able to change Settings. Save anyway?`
+      : "You haven't chosen your name under “Signed in as”, so you won't be able to change Settings after saving. Save anyway?")) return;
 
   // Carry renames over to the tasks that use the old names.
   const pRen = {}, mRen = {};
@@ -960,7 +1005,7 @@ async function saveSettings(){
   try {
     await dbRef.collection("settings").doc("config").set({...s, updatedAt:new Date().toISOString(), updatedBy: editor || "Manager"});
     for (const t of moved) await dbRef.doc("tasks/"+t.id).update({project: pRen[t.project] || t.project, assignees:(t.assignees||[]).map(a => mRen[a] || a)});
-    sDirty = false; applySettings(s); refreshPickers(); renderSettings(); render();
+    sDirty = false; applySettings(s); applyAccess(); refreshPickers(); renderSettings(); render();
     toast(moved.length ? `Settings saved · ${moved.length} task${moved.length===1?"":"s"} updated` : "Settings saved");
   } catch(e){ toast("Could not save settings: " + (e && (e.message||e.code))); }
 }
@@ -987,14 +1032,37 @@ function modifyDraft(src){
   const fam = family(src), latest = fam[fam.length-1] || src;
   const original = fam.find(x => stripVersion(x.name) === x.name.trim()) || latest;
   const n = nextVersion(fam);
-  return {name:`${stripVersion(original.name)} (Modify - ver. ${n}.0)`, project:latest.project, type:latest.type,
+  return {name:`${stripVersion(original.name)} (Modify - ver. ${n}.0)`, project:latest.project, module:latest.module||"", sub:latest.sub||"", type:latest.type,
     priority:latest.priority, assignees:[...(latest.assignees||[])], link:latest.link||"", modifies:latest.id,
     _ver:{n, base:stripVersion(original.name), count:fam.length}};
 }
 
+// Master project → project → sub-project, picked in that order before the task name.
+// The lists come from Settings → Projects & sub-projects; picking a level resets the ones below it.
+function hierSelects(draft, onChange){
+  draft.module = draft.module || ""; draft.sub = draft.sub || "";
+  const modsOf = p => ((PROJECTS.find(x=>x.key===p)||{}).modules||[]).filter(m=>m.name);
+  const subsOf = (p, m) => ((modsOf(p).find(x=>x.name===m)||{}).subs||[]).filter(x=>x.name).map(x=>x.name);
+  const keepVal = (items, v) => v && !items.includes(v) ? [v, ...items] : items;
+  const fillOpts = (sel, items, v, none) => {
+    sel.replaceChildren(el("option",{value:"", text:none}), ...keepVal(items, v).map(i=>el("option",{value:i,text:i})));
+    sel.value = v || ""; sel.disabled = !items.length && !v;
+  };
+  const mSel = el("select",{id:"f-project"}), pSel = el("select",{id:"f-module"}), sSel = el("select",{id:"f-sub"});
+  const paintSubs = () => fillOpts(sSel, subsOf(draft.project, draft.module), draft.sub, draft.module ? (subsOf(draft.project, draft.module).length ? "— Pick a sub-project —" : "No sub-projects") : "Pick a project first");
+  const paintMods = () => { fillOpts(pSel, modsOf(draft.project).map(m=>m.name), draft.module, modsOf(draft.project).length ? "— Pick a project —" : "No projects yet"); paintSubs(); };
+  fillOpts(mSel, PROJECTS.map(p=>p.key), draft.project, "— Pick a master project —"); mSel.disabled = false;
+  mSel.addEventListener("change", () => { draft.project = mSel.value; draft.module = ""; draft.sub = ""; paintMods(); onChange(); });
+  pSel.addEventListener("change", () => { draft.module = pSel.value; draft.sub = ""; paintSubs(); onChange(); });
+  sSel.addEventListener("change", () => { draft.sub = sSel.value; onChange(); });
+  paintMods();
+  const box = (label, id, input) => el("div",{class:"f"}, el("label",{for:id, text:label}), input);
+  return [box("Master project","f-project",mSel), box("Project","f-module",pSel), box("Sub-project","f-sub",sSel)];
+}
+
 function openSheet(id, prefill){
   const isNew = id === "new";
-  const t = isNew ? {id:"", project: $("#fProject").value || (PROJECTS[0]||{}).key || "", type: TYPES.includes("Web") ? "Web" : TYPES[0]||"", name:"", priority: PRIS.includes("Medium") ? "Medium" : PRIS[0]||"", status:"Not Started",
+  const t = isNew ? {id:"", project: $("#fProject").value || "", module:"", sub:"", type: TYPES.includes("Web") ? "Web" : TYPES[0]||"", name:"", priority: PRIS.includes("Medium") ? "Medium" : PRIS[0]||"", status:"Not Started",
       assignees: me ? [me] : [], start:"", due:"", end:"", link:"", notes:"", ...(prefill||{})} : tasks.find(x=>x.id===id);
   if (!t) return closeSheet();
   openId = id;
@@ -1045,10 +1113,14 @@ function openSheet(id, prefill){
     paintS(); if (!full && !isNew) save(); }}, s)));
   paintS();
 
+  let hierChanged = () => {};
+  const hierFields = full ? hierSelects(draft, () => hierChanged())
+    : [field("Master project","project"), field("Project","module"), field("Sub-project","sub")];
+
   const fields = el("div",{class:"fields"},
+    ...hierFields,
     full ? field("Task name","name","text",{full:true}) : null,
     isNew && full ? el("div",{class:"f full", id:"f-similar"}) : null,
-    field("Project","project","select",{items:PROJECTS.map(p=>p.key)}),
     field("Type","type","select",{items:TYPES}),
     field("Priority","priority","select",{items:PRIS}),
     field("Assigned to","assignees","text",{full:true}),
@@ -1075,9 +1147,10 @@ function openSheet(id, prefill){
   if (fnote) footer.append(fnote);
 
   async function save(){
+    if (full && !draft.project){ toast("Pick a master project first"); return; }
     if (full && !draft.name.trim()){ toast("Give the task a name first"); return; }
     const by = editor || (canManage ? "Manager" : "Someone");
-    const body = full ? {project:draft.project, type:draft.type, name:draft.name.trim(), priority:draft.priority, status:draft.status,
+    const body = full ? {project:draft.project, module:draft.module||"", sub:draft.sub||"", type:draft.type, name:draft.name.trim(), priority:draft.priority, status:draft.status,
       assignees:draft.assignees, start:draft.start||"", due:draft.due||"", end:draft.end||"", cancelled:draft.cancelled||"", link:draft.link||"", notes:draft.notes||""}
       : {status:draft.status, start:draft.start||"", end:draft.end||"", cancelled:draft.cancelled||"", notes:draft.notes||""};
     body.updatedAt = new Date().toISOString(); body.updatedBy = by;
@@ -1098,7 +1171,7 @@ function openSheet(id, prefill){
 
   const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label": isNew?"New task":t.name},
     el("header",{}, el("div",{},
-      el("div",{class:"eyebrow", text: isNew ? "New task" : `${serial(t)} · ${t.project}`}),
+      el("div",{class:"eyebrow", text: isNew ? "New task" : `${serial(t)} · ${taskPath(t)}`}),
       el("h2",{text: isNew ? "Add a task" : t.name})),
       el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")),
     el("div",{class:"body"},
@@ -1107,7 +1180,7 @@ function openSheet(id, prefill){
       fields),
     footer);
   $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
-  const first = sheet.querySelector(full?"#f-name":".x"); first && first.focus();
+  const first = sheet.querySelector(!full ? ".x" : isNew && !draft.project ? "#f-project" : "#f-name"); first && first.focus();
 
   // New task: as the name is typed, list earlier tasks with that name and offer "Modify" to start the next version.
   const sim = sheet.querySelector("#f-similar"), nameIn = sheet.querySelector("#f-name");
@@ -1118,16 +1191,22 @@ function openSheet(id, prefill){
           ` of “${draft._ver.base}” · ${draft._ver.count} earlier version${draft._ver.count===1?"":"s"}`));
         return;
       }
-      const q = baseKey(nameIn.value);
-      if (q.length < 2){ sim.replaceChildren(); return; }
+      // With a project picked, list what was already done under it (even before typing); typing narrows it down.
+      const q = baseKey(nameIn.value), raw = nameIn.value.trim().toLowerCase();
+      const scoped = !!draft.module;
+      if (!scoped && q.length < 2){ sim.replaceChildren(); return; }
+      const inScope = x => x.project === draft.project && x.module === draft.module && (!draft.sub || x.sub === draft.sub);
       const seen = new Set(), fams = [];
       [...tasks].sort((a,b)=>(b.order||0)-(a.order||0)).forEach(x => {
         const k = baseKey(x.name);
-        if (seen.has(k) || !(k.includes(q) || x.name.toLowerCase().includes(nameIn.value.trim().toLowerCase()))) return;
+        if (seen.has(k)) return;
+        const nameHit = q.length >= 2 && (k.includes(q) || x.name.toLowerCase().includes(raw));
+        if (!(scoped && q.length < 2 ? inScope(x) : nameHit && (!scoped || inScope(x) || !x.module))) return;
         seen.add(k); fams.push(family(x));
       });
       if (!fams.length){ sim.replaceChildren(); return; }
-      sim.replaceChildren(el("label",{text:"Done before"}), el("ul",{class:"similar"}, ...fams.slice(0,6).map(fam => {
+      const where = draft.sub || draft.module;
+      sim.replaceChildren(el("label",{text: where ? `Done before in ${where}` : "Done before"}), el("ul",{class:"similar"}, ...fams.slice(0,6).map(fam => {
         const latest = fam[fam.length-1];
         return el("li",{},
           el("div",{class:"t"}, el("div",{text:latest.name}),
@@ -1136,6 +1215,7 @@ function openSheet(id, prefill){
       })));
     };
     nameIn.addEventListener("input", () => { draft._ver = null; draft.modifies = ""; paint(); });
+    hierChanged = () => { if (!draft._ver) paint(); };
     paint();
   }
 }
@@ -1165,6 +1245,160 @@ function toast(msg){
   t.textContent = msg; toastTimer = setTimeout(()=>t.remove(), 2600);
 }
 
+// ---------- task requests ----------
+// Anyone with a role other than Viewer can request a task. An Approver or Admin approves it, which adds it to the
+// task list as Not Started, or rejects it. Requests live in the "task_requests" collection and are always saved whole.
+const REQ_CLS = {Pending:"st-oh", Approved:"st-ok", Rejected:"st-late", Withdrawn:"st-cx"};
+const saveRequest = r => dbRef.collection("task_requests").doc(r.id).set(r);
+function watchRequests(db){
+  db.collection("task_requests").onSnapshot(snap => {
+    requests = snap.docs.map(d => ({...d.data(), id:d.id})); requestsErr = ""; render();
+  }, e => { requestsErr = (e && e.message) || "unavailable"; render(); });
+}
+
+function openRequestSheet(){
+  openId = "request";
+  const draft = {project: $("#fProject").value || "", module:"", sub:"", name:"", type: TYPES.includes("Web") ? "Web" : TYPES[0]||"",
+    priority: PRIS.includes("Medium") ? "Medium" : PRIS[0]||"", due:"", reason:"", assignees: me ? [me] : []};
+  const box = (label, id, input, full) => el("div",{class:"f"+(full?" full":"")}, el("label",{for:id, text:label}), input);
+  const sel = (id, key, items) => { const s = el("select",{id}, ...items.map(i => el("option",{value:i, text:i})));
+    s.value = draft[key]; s.addEventListener("change", () => draft[key] = s.value); return s; };
+  const nameIn = el("input",{id:"r-name", type:"text", placeholder:"What do you want to build or change?"});
+  nameIn.addEventListener("input", () => draft.name = nameIn.value);
+  const dueIn = el("input",{id:"r-due", type:"date"}); dueIn.addEventListener("input", () => draft.due = dueIn.value);
+  const why = el("textarea",{id:"r-why", placeholder:"Why it's needed, who asked for it, anything the approver should know"});
+  why.addEventListener("input", () => draft.reason = why.value);
+  const picks = el("div",{class:"picks", role:"group"}, ...TEAM.map(n => {
+    const cb = el("input",{type:"checkbox", value:n, checked: draft.assignees.includes(n) || null});
+    cb.addEventListener("change", () => { draft.assignees = TEAM.filter(x => x===n ? cb.checked : draft.assignees.includes(x)); });
+    return el("label",{class:"pick"}, cb, n);
+  }));
+
+  async function submit(){
+    if (!draft.project) return toast("Pick a master project first");
+    if (!draft.name.trim()) return toast("Give the task a name first");
+    const now = new Date().toISOString();
+    const r = {...draft, id:"r" + Date.now().toString(36), name:draft.name.trim(), reason:draft.reason.trim(),
+      status:"Pending", requestedBy:me, requestedAt:now, decidedBy:"", decidedAt:"", decisionNote:"", taskId:""};
+    try { await saveRequest(r); toast("Request sent for approval"); closeSheet(); }
+    catch(e){ toast("Could not send: " + (e && (e.message||e.code))); }
+  }
+
+  const sheet = el("aside",{class:"sheet", role:"dialog", "aria-modal":"true", "aria-label":"Request a task"},
+    el("header",{}, el("div",{}, el("div",{class:"eyebrow", text:"Task request"}), el("h2",{text:"Request a task"})),
+      el("button",{class:"x", "aria-label":"Close", onclick:closeSheet}, "×")),
+    el("div",{class:"body"},
+      el("p",{class:"note", style:"margin:0", text:"An Approver reviews your request. Once it's approved, it's added to the task list automatically."}),
+      el("div",{class:"fields"},
+        ...hierSelects(draft, () => {}),
+        box("Task name","r-name",nameIn,true),
+        box("Type","r-type",sel("r-type","type",TYPES)),
+        box("Priority","r-pri",sel("r-pri","priority",PRIS)),
+        box("Needed by","r-due",dueIn),
+        el("div",{class:"f full"}, el("label",{text:"Who will do it"}), picks),
+        box("Details","r-why",why,true))),
+    el("footer",{}, el("button",{class:"btn primary", onclick:submit}, "Send request"), el("span",{class:"spacer"}),
+      el("span",{class:"note", text:`Requested by ${me}`})));
+  $("#sheetRoot").replaceChildren(el("div",{class:"scrim", onclick:closeSheet}), sheet);
+  sheet.querySelector(draft.project ? "#f-module" : "#f-project").focus();
+}
+
+async function approveRequest(r, opts){
+  const now = new Date().toISOString(), nid = "t" + Date.now().toString(36);
+  const trail = `Requested by ${r.requestedBy || "someone"} on ${fmtY((r.requestedAt||"").slice(0,10))} · approved by ${me || "Admin"} on ${fmtY(TODAY)}` + (opts.note ? `: ${opts.note}` : "");
+  const task = {id:nid, project:r.project, module:r.module||"", sub:r.sub||"", type:r.type||"", name:r.name, priority:r.priority||"",
+    status:"Not Started", assignees:opts.assignees, start:"", due:opts.due||"", end:"", cancelled:"", link:"",
+    notes:[r.reason, trail].filter(Boolean).join("\n\n"), order: Math.max(0, ...tasks.map(x=>x.order||0)) + 1,
+    createdAt:now, updatedAt:now, updatedBy: me || "Admin"};
+  try {
+    await dbRef.collection("tasks").doc(nid).set(task);
+    await saveRequest({...r, status:"Approved", decidedBy: me || "Admin", decidedAt:now, decisionNote:opts.note||"", taskId:nid});
+    toast("Approved · added to Tasks");
+  } catch(e){ toast("Could not approve: " + (e && (e.message||e.code))); }
+}
+async function decideRequest(r, status, note){
+  try { await saveRequest({...r, status, decidedBy: me || "Admin", decidedAt:new Date().toISOString(), decisionNote:note||""});
+    toast(status === "Rejected" ? "Request rejected" : "Request withdrawn"); }
+  catch(e){ toast("Could not update: " + (e && (e.message||e.code))); }
+}
+
+let reqOpen = null;   // {id, mode:"approve"|"reject"} for the request card showing its approve/reject form
+let reqShow = "Pending";
+function renderRequests(){
+  const root = $("#v-requests");
+  if (requestsErr){
+    root.replaceChildren(el("div",{class:"empty"}, el("b",{text:"Task requests aren't set up yet"}),
+      "The database needs a task_requests table. Run the SQL from the setup notes in Supabase, then reload. (" + requestsErr + ")"));
+    return;
+  }
+  const path = r => [r.project, r.module, r.sub].filter(Boolean).join(" › ");
+  const when = s => s ? fmtY(s.slice(0,10)) : "";
+  const counts = Object.fromEntries(["Pending","Approved","Rejected","Withdrawn"].map(k => [k, requests.filter(r => r.status === k).length]));
+  const list = requests.filter(r => reqShow === "All" || r.status === reqShow)
+    .sort((a,b) => reqShow === "Pending" ? (a.requestedAt||"").localeCompare(b.requestedAt||"") : (b.decidedAt||b.requestedAt||"").localeCompare(a.decidedAt||a.requestedAt||""));
+
+  const reqCard = r => {
+    const mineReq = me && r.requestedBy === me;
+    const meta = el("div",{class:"meta"},
+      el("span",{class:"pill "+REQ_CLS[r.status], text:r.status}),
+      r.priority ? el("span",{class:"pri "+r.priority, text:r.priority}) : null, r.type ? el("span",{text:r.type}) : null,
+      r.due ? el("span",{text:"Needed by "+fmtY(r.due)}) : null);
+    const kids = [meta,
+      el("div",{class:"nm", text:r.name}),
+      el("div",{class:"path", text:path(r)}),
+      r.reason ? el("p",{class:"why", text:r.reason}) : null,
+      el("div",{class:"note", text:`Requested by ${r.requestedBy || "someone"} · ${when(r.requestedAt)}` + ((r.assignees||[]).length ? ` · for ${(r.assignees||[]).join(", ")}` : "")})];
+    if (r.status !== "Pending"){
+      kids.push(el("div",{class:"note decided"}, `${r.status} by ${r.decidedBy || "—"} · ${when(r.decidedAt)}` + (r.decisionNote ? ` — “${r.decisionNote}”` : ""),
+        r.taskId && tasks.find(t => t.id === r.taskId) ? el("button",{class:"linkbtn", style:"padding-left:8px", onclick:()=>openSheet(r.taskId)}, "Open task →") : null));
+    } else if (reqOpen && reqOpen.id === r.id){
+      const approve = reqOpen.mode === "approve";
+      const noteIn = el("input",{type:"text", placeholder: approve ? "Note for the requester (optional)" : "Reason for rejecting (optional)"});
+      let assignees = [...(r.assignees && r.assignees.length ? r.assignees : r.requestedBy ? [r.requestedBy] : [])];
+      const dueIn = el("input",{type:"date"}); dueIn.value = r.due || "";
+      const names = [...TEAM, ...assignees.filter(a => !TEAM.includes(a))];
+      kids.push(el("div",{class:"decide"},
+        approve ? el("div",{class:"fields"},
+          el("div",{class:"f full"}, el("label",{text:"Assign to"}), el("div",{class:"picks"}, ...names.map(n => {
+            const cb = el("input",{type:"checkbox", checked: assignees.includes(n) || null});
+            cb.addEventListener("change", () => { assignees = names.filter(x => x===n ? cb.checked : assignees.includes(x)); });
+            return el("label",{class:"pick"}, cb, n); }))),
+          el("div",{class:"f"}, el("label",{text:"Due date"}), dueIn)) : null,
+        el("div",{class:"f"}, noteIn),
+        el("div",{class:"acts"},
+          el("button",{class:"btn " + (approve ? "primary" : "danger"), onclick: async () => {
+            reqOpen = null;
+            if (approve) await approveRequest(r, {assignees, due:dueIn.value, note:noteIn.value.trim()});
+            else await decideRequest(r, "Rejected", noteIn.value.trim());
+          }}, approve ? "Approve & add to Tasks" : "Reject request"),
+          el("button",{class:"btn", onclick:() => { reqOpen = null; renderRequests(); }}, "Cancel"))));
+    } else {
+      const acts = [];
+      if (canApprove && canWrite){
+        acts.push(el("button",{class:"btn primary", onclick:() => { reqOpen = {id:r.id, mode:"approve"}; renderRequests(); }}, "Approve"),
+          el("button",{class:"btn danger", onclick:() => { reqOpen = {id:r.id, mode:"reject"}; renderRequests(); }}, "Reject"));
+      }
+      if (mineReq && canWrite) acts.push(el("button",{class:"btn", onclick:() => decideRequest(r, "Withdrawn", "")}, "Withdraw"));
+      if (acts.length) kids.push(el("div",{class:"acts"}, ...acts));
+    }
+    return el("div",{class:"panel req"}, ...kids);
+  };
+
+  const seg = el("div",{class:"seg", role:"tablist", "aria-label":"Request status"},
+    ...["Pending","Approved","Rejected","Withdrawn","All"].map(k => el("button",{role:"tab", "aria-selected": String(reqShow === k),
+      onclick:() => { reqShow = k; reqOpen = null; renderRequests(); }}, k, k !== "All" && counts[k] ? el("span",{text:counts[k]}) : null)));
+  const who = canApprove ? "You can approve requests." : canRequest ? "An Approver or Admin reviews each request." : "";
+  root.replaceChildren(
+    el("div",{class:"reqhead"},
+      el("div",{}, el("h2",{style:"margin:0", text:"Task requests"}),
+        el("p",{class:"note", style:"margin:4px 0 0", text:`Approved requests are added to Tasks as Not Started. ${who}`})),
+      el("span",{class:"spacer"}),
+      canRequest ? el("button",{class:"btn primary", onclick:openRequestSheet}, "+ Request a task") : null),
+    seg,
+    list.length ? el("div",{class:"reqs"}, ...list.map(reqCard))
+      : el("div",{class:"empty"}, el("b",{text: reqShow === "Pending" ? "No requests waiting" : `No ${reqShow.toLowerCase()} requests`}),
+          reqShow === "Pending" && canRequest ? "Use “+ Request a task” to ask for something new." : ""));
+}
 
 // ---------- storage ----------
 // Inside a Claude artifact the page uses Claude's shared database.
@@ -1205,7 +1439,7 @@ function watchSettings(db){
   db.collection("settings").onSnapshot(snap => {
     const doc = snap.docs.find(d => d.id === "config");
     applySettings(doc ? doc.data() : window.SEED_SETTINGS);
-    refreshPickers(); render();
+    applyAccess(); refreshPickers(); render();
   }, () => {});
 }
 
@@ -1213,17 +1447,18 @@ function watchSettings(db){
 // ---------- Supabase ----------
 // Used when supabaseconfig.js has your Project URL and anon key. Tables: public.tasks and public.settings
 // (see supabase_schema.sql). The app's field names are mapped to the table's column names here.
-const TASK_MAP = {start:"start_date", due:"due_date", end:"end_date", cancelled:"cancelled_date", order:"sort_order",
+const TASK_MAP = {start:"start_date", due:"due_date", end:"end_date", cancelled:"cancelled_date", order:"sort_order", sub:"sub_project",
   createdAt:"created_at", updatedAt:"updated_at", updatedBy:"updated_by"};
 const SET_MAP = {valueRate:"value_rate", valueRates:"value_rates", updatedAt:"updated_at", updatedBy:"updated_by"};
 const COLS = {
   tasks: new Set(["id","project","type","name","priority","status","assignees","start_date","due_date","end_date","cancelled_date",
-    "link","notes","sort_order","modifies","value","created_at","updated_at","updated_by"]),
+    "link","notes","sort_order","modifies","module","sub_project","value","created_at","updated_at","updated_by"]),
   settings: new Set(["id","projects","priorities","types","team","value_rate","value_rates","updated_at","updated_by"])
 };
 const DATE_COLS = new Set(["start_date","due_date","end_date","cancelled_date"]);
 const mapFor = table => table === "tasks" ? TASK_MAP : SET_MAP;
 function toRow(table, obj){
+  if (table === "task_requests"){ const {id, ...data} = obj || {}; return {data}; }
   const map = mapFor(table), r = {};
   for (const [k,v] of Object.entries(obj||{})){
     const c = map[k] || k; if (!COLS[table].has(c)) continue;
@@ -1235,11 +1470,12 @@ function toRow(table, obj){
   return r;
 }
 function fromRow(table, row){
+  if (table === "task_requests") return {...(row && row.data || {}), id: row && row.id};
   const inv = Object.fromEntries(Object.entries(mapFor(table)).map(([a,b]) => [b,a])), o = {};
   for (const [c,v] of Object.entries(row||{})){
     const k = inv[c] || c;
     if (DATE_COLS.has(c)) o[k] = v || "";
-    else if (v == null && ["link","notes","type"].includes(k)) o[k] = "";
+    else if (v == null && ["link","notes","type","module","sub"].includes(k)) o[k] = "";
     else if (v == null && (k === "modifies" || k === "valueRate")) { if (k === "valueRate") o[k] = ""; }
     else o[k] = v;
   }
@@ -1250,6 +1486,14 @@ function makeSupabaseDb(sb){
   const wrap = e => ({code:"unavailable", message: e && /row-level security|permission|42501/i.test((e.code||"")+(e.message||""))
     ? "Supabase refused the change. Its table policies need to allow edits without signing in." : (e && e.message ? e.message : String(e))});
   const notSaved = {code:"unavailable", message:"Not saved. Supabase didn't accept the change: check the table policies allow edits (or the item no longer exists)."};
+  // Older tasks tables have no module / sub_project columns yet: save the rest and say how to add them.
+  const dropHier = (table, row, error) => {
+    if (table !== "tasks" || !/module|sub_project/.test(error.message || "")) return false;
+    delete row.module; delete row.sub_project;
+    console.warn("tasks.module / tasks.sub_project columns missing. Run: alter table public.tasks add column module text, add column sub_project text;");
+    toast("Saved, but the project / sub-project wasn't stored: add the module and sub_project columns in Supabase");
+    return true;
+  };
   const after = table => { const r = reloads[table]; if (r) r(); };
   const docRef = (table, id) => ({
     async set(body){
@@ -1260,8 +1504,11 @@ function makeSupabaseDb(sb){
         delete row.value_rates; ({error} = await sb.from(table).upsert(row));
         if (!error) console.warn("settings.value_rates column missing; printing/BA form rates use defaults. Run: alter table public.settings add column value_rates jsonb;");
       }
+      if (error && dropHier(table, row, error)) ({error} = await sb.from(table).upsert(row));
       if (error) throw wrap(error); after(table); },
-    async update(body){ const {data, error} = await sb.from(table).update(toRow(table, body)).eq("id", id).select("id");
+    async update(body){ const row = toRow(table, body);
+      let {data, error} = await sb.from(table).update(row).eq("id", id).select("id");
+      if (error && dropHier(table, row, error)) ({data, error} = await sb.from(table).update(row).eq("id", id).select("id"));
       if (error) throw wrap(error); if (!data || !data.length) throw notSaved; after(table); },
     async delete(){ const {data, error} = await sb.from(table).delete().eq("id", id).select("id");
       if (error) throw wrap(error); if (!data || !data.length) throw notSaved; after(table); }
@@ -1302,6 +1549,7 @@ function fromDoc(d){
 }
 
 // ---------- boot ----------
+applyAccess();
 refreshPickers();
 setView(view);
 
@@ -1314,22 +1562,22 @@ setView(view);
     const sb = window.supabase.createClient(cfg.url, cfg.anonKey, {auth:{persistSession:false, autoRefreshToken:false}});
     const db = makeSupabaseDb(sb);
     dbRef = db; window.trackerDb = db;
-    canManage = canWrite = true;
-    watchSettings(db);
+    hostManage = canWrite = true;
+    watchSettings(db); watchRequests(db);
     db.collection("tasks").onSnapshot(snap => {
       tasks = snap.docs.map(d => fromDoc(d));
       loaded = true; refreshPickers(); render();
-      if (openId && openId !== "new" && !tasks.find(x=>x.id===openId)) closeSheet();
+      if (openId && openId !== "new" && openId !== "request" && !tasks.find(x=>x.id===openId)) closeSheet();
     }, e => { loaded = true; render(); toast("Couldn't load tasks from Supabase: " + e.message); });
     return;
   }
   if (cfgOk && !window.supabase) console.warn("Supabase library did not load; using browser-only storage.");
   if (!claude || !claude.use){
     // Standalone mode: browser-only storage, full editing for whoever opens the page.
-    canManage = true; canWrite = true;
+    hostManage = true; canWrite = true;
     const db = makeLocalDb({tasks: window.SEED_TASKS || []});
     dbRef = db; window.trackerDb = db;
-    watchSettings(db);
+    watchSettings(db); watchRequests(db);
     db.collection("tasks").onSnapshot(snap => {
       tasks = snap.docs.map(d => fromDoc(d));
       loaded = true; refreshPickers(); render();
@@ -1338,16 +1586,16 @@ setView(view);
   }
   const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
   if (user){
-    canManage = await user.canEdit();
+    hostManage = await user.canEdit();
     const w = await user.can("data.write"); if (w === false) canWrite = false;
   }
   if (!db){ loaded = true; canWrite = false; render(); return; }
   dbRef = db;
-  watchSettings(db);
+  watchSettings(db); watchRequests(db);
   db.collection("tasks").onSnapshot(snap => {
     tasks = snap.docs.map(d => fromDoc(d));
     loaded = true; refreshPickers(); render();
-    if (openId && openId !== "new" && !tasks.find(x=>x.id===openId)) closeSheet();
+    if (openId && openId !== "new" && openId !== "request" && !tasks.find(x=>x.id===openId)) closeSheet();
   }, err => { loaded = true; render(); toast("Lost connection to the tracker. Reload to try again."); });
 })();
 })();
